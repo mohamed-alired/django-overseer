@@ -1,4 +1,4 @@
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 
 from overseer.prune import prune
 
@@ -13,7 +13,10 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        report = prune(days=options["days"], metrics_days=options["metrics_days"])
+        try:
+            report = prune(days=options["days"], metrics_days=options["metrics_days"])
+        except ValueError as exc:
+            raise CommandError(str(exc)) from None
         for key, count in report.items():
             self.stdout.write(f"{key}: {count}")
         self.stdout.write(self.style.SUCCESS("Pruned."))

@@ -50,6 +50,10 @@ class Schedule(models.Model):
         "Job", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
     )
     runs_count = models.PositiveIntegerField(default=0)
+    # Why the schedule last failed to enqueue, or why it was disabled ("" when healthy).
+    last_error = models.TextField(blank=True)
+    # Disabled by sync because its declaration disappeared; re-enabled if it comes back.
+    missing_from_code = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -59,6 +63,16 @@ class Schedule(models.Model):
 
     def __str__(self):
         return self.name
+
+    def clean(self):
+        from django.core.exceptions import ValidationError
+
+        from .scheduling.validation import check_schedule
+
+        try:
+            check_schedule(self)
+        except ValueError as exc:
+            raise ValidationError(str(exc)) from None
 
     @property
     def spec(self):
@@ -201,12 +215,35 @@ class Worker(models.Model):
     )
     tasks_processed = models.PositiveIntegerField(default=0)
     tasks_failed = models.PositiveIntegerField(default=0)
+    # Set by ``overseer_worker``. Workers without heartbeats (a plain ``db_worker``) are only
+    # seen when they run a task, so they are never reported offline.
+    heartbeat_seconds = models.FloatField(null=True, blank=True)
 
     class Meta:
         ordering = ["-last_seen_at"]
 
     def __str__(self):
         return self.worker_id
+
+    @property
+    def has_heartbeat(self) -> bool:
+        return self.heartbeat_seconds is not None
+
+    def offline_after(self) -> float:
+        """Seconds of silence after which a heartbeat worker counts as offline."""
+        from . import conf
+
+        configured = conf.get_setting("OVERSEER_WORKER_OFFLINE_AFTER")
+        return max(configured, 3 * (self.heartbeat_seconds or 0))
+
+    def is_online(self, now=None) -> bool | None:
+        """True/False for heartbeat workers; None when it cannot be known."""
+        if self.stopped_at is not None:
+            return False
+        if not self.has_heartbeat:
+            return None
+        now = now or timezone.now()
+        return (now - self.last_seen_at).total_seconds() < self.offline_after()
 
 
 class MetricBucket(models.Model):

@@ -61,6 +61,7 @@ class HeartbeatWorker(DBWorker):
                 "started_at": now,
                 "last_seen_at": now,
                 "stopped_at": None,
+                "heartbeat_seconds": self.heartbeat,
             },
         )
         return row

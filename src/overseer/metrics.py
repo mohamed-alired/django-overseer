@@ -54,6 +54,21 @@ class _Agg:
         }
 
 
+METRIC_FIELDS = [
+    "enqueued",
+    "started",
+    "succeeded",
+    "failed",
+    "abandoned",
+    "runtime_ms_sum",
+    "runtime_ms_p50",
+    "runtime_ms_p95",
+    "runtime_ms_max",
+    "wait_ms_sum",
+    "wait_ms_max",
+]
+
+
 def aggregate(since: datetime, until: datetime) -> dict[tuple[datetime, str, str], _Agg]:
     """Aggregate every Run event (enqueue, start, finish) that fell in [since, until)."""
     buckets: dict[tuple[datetime, str, str], _Agg] = defaultdict(_Agg)
@@ -117,7 +132,15 @@ def rollup(since: datetime | None = None, until: datetime | None = None) -> int:
             MetricBucket(bucket_start=start, queue_name=queue, task_path=task, **agg.as_fields())
             for (start, queue, task), agg in buckets.items()
         ]
-        MetricBucket.objects.bulk_create(rows, batch_size=500)
+        # An upsert: two schedulers rolling up the same minute at once must not collide on
+        # the unique (bucket_start, queue_name, task_path) constraint.
+        MetricBucket.objects.bulk_create(
+            rows,
+            batch_size=500,
+            update_conflicts=True,
+            unique_fields=["bucket_start", "queue_name", "task_path"],
+            update_fields=METRIC_FIELDS,
+        )
     return len(rows)
 
 

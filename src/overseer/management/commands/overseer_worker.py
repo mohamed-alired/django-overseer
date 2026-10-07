@@ -40,6 +40,8 @@ class Command(DBWorkerCommand):
         heartbeat,
         **options,
     ):
+        if heartbeat <= 0:
+            raise CommandError("--heartbeat must be a positive number of seconds")
         self.configure_logging(verbosity)
         if reload and batch:
             reload = False

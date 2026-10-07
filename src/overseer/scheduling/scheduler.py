@@ -7,35 +7,38 @@ import signal
 import time
 from datetime import timedelta
 
-from django.conf import settings
-from django.db import DatabaseError, close_old_connections, transaction
+from django.db import close_old_connections, transaction
+from django.db.models import F
 from django.utils import timezone
 from django.utils.module_loading import import_string
 
 from .. import conf
 from ..models import Job, JobSource, Schedule
 from .cron import parse
+from .validation import check_schedule, schedule_timezone
 
 logger = logging.getLogger("overseer")
 
 
-def schedule_timezone(schedule: Schedule) -> str:
-    return (
-        schedule.timezone
-        or conf.get_setting("OVERSEER_SCHEDULER_TIMEZONE")
-        or settings.TIME_ZONE
-        or "UTC"
-    )
-
-
 def compute_next_run(schedule: Schedule, after=None):
-    """The next fire time strictly after ``after`` (default: now)."""
+    """The next fire time strictly after ``after`` (default: now).
+
+    Raises ``ValueError`` (``CronError`` is one) when the schedule can never fire.
+    """
     after = after or timezone.now()
+    check_schedule(schedule)
     if schedule.cron:
         return parse(schedule.cron).next_after(after, tz=schedule_timezone(schedule))
-    if schedule.interval_seconds:
-        return after + timedelta(seconds=schedule.interval_seconds)
-    raise ValueError(f"Schedule {schedule.name!r} has neither a cron expression nor an interval")
+    return after + timedelta(seconds=schedule.interval_seconds)
+
+
+def disable_broken(schedule: Schedule, exc: Exception) -> None:
+    """Switch off a schedule that can never fire, and say why on the row."""
+    logger.error("Schedule %r disabled: %s", schedule.name, exc)
+    schedule.enabled = False
+    schedule.next_run_at = None
+    schedule.last_error = f"Disabled: {exc}"
+    schedule.save(update_fields=["enabled", "next_run_at", "last_error", "updated_at"])
 
 
 def enqueue_schedule(schedule: Schedule, *, source=JobSource.SCHEDULE) -> Job:
@@ -61,7 +64,7 @@ def run_now(schedule: Schedule) -> Job:
     """Manual trigger from the dashboard; does not move ``next_run_at``."""
     job = enqueue_schedule(schedule, source=JobSource.MANUAL)
     Schedule.objects.filter(pk=schedule.pk).update(
-        last_run_at=timezone.now(), last_job=job, runs_count=schedule.runs_count + 1
+        last_run_at=timezone.now(), last_job=job, runs_count=F("runs_count") + 1
     )
     return job
 
@@ -70,11 +73,24 @@ def tick(now=None) -> list[Job]:
     """Fire every enabled schedule whose ``next_run_at`` has passed. Returns the Jobs enqueued.
 
     A schedule missed while no scheduler was running fires once, then continues from now;
-    missed occurrences are not replayed.
+    missed occurrences are not replayed. Enabled rows without a ``next_run_at`` (created by
+    hand) get one. A schedule that can never fire (bad cron, unknown timezone) is disabled
+    with the reason in ``last_error``; it never blocks the others.
     """
     now = now or timezone.now()
     jobs = []
     with transaction.atomic():
+        unscheduled = Schedule.objects.select_for_update(skip_locked=True).filter(
+            enabled=True, next_run_at__isnull=True
+        )
+        for schedule in unscheduled:
+            try:
+                schedule.next_run_at = compute_next_run(schedule, now)
+            except ValueError as exc:
+                disable_broken(schedule, exc)
+            else:
+                schedule.save(update_fields=["next_run_at", "updated_at"])
+
         due = (
             Schedule.objects.select_for_update(skip_locked=True)
             .filter(enabled=True, next_run_at__lte=now)
@@ -82,20 +98,35 @@ def tick(now=None) -> list[Job]:
         )
         for schedule in due:
             try:
-                job = enqueue_schedule(schedule)
-            except Exception:
+                next_run = compute_next_run(schedule, now)
+            except ValueError as exc:
+                disable_broken(schedule, exc)
+                continue
+            job, error = None, ""
+            try:
+                with transaction.atomic():  # a failed enqueue must not poison the others
+                    job = enqueue_schedule(schedule)
+            except Exception as exc:
                 logger.exception(
                     "Schedule %r could not enqueue %s", schedule.name, schedule.task_path
                 )
-                job = None
+                error = f"{type(exc).__name__}: {exc}"
             schedule.last_run_at = now
-            schedule.next_run_at = compute_next_run(schedule, now)
+            schedule.next_run_at = next_run
+            schedule.last_error = error
             if job is not None:
                 schedule.last_job = job
                 schedule.runs_count += 1
                 jobs.append(job)
             schedule.save(
-                update_fields=["last_run_at", "next_run_at", "last_job", "runs_count", "updated_at"]
+                update_fields=[
+                    "last_run_at",
+                    "next_run_at",
+                    "last_job",
+                    "runs_count",
+                    "last_error",
+                    "updated_at",
+                ]
             )
     return jobs
 
@@ -135,9 +166,10 @@ class Scheduler:
     def run(self, *, once: bool = False, max_ticks: int | None = None) -> int:
         """Loop until a signal arrives (or ``once`` / ``max_ticks``). Returns the tick count.
 
-        A database error (a locked SQLite file, a server restarting) is logged and the
-        loop carries on at the next interval; a scheduler never dies over a transient
-        failure. With ``once`` the error propagates so the command exits non-zero.
+        An error in an iteration (a locked SQLite file, a server restarting, a broken
+        notifier) is logged and the loop carries on at the next interval; a scheduler never
+        dies over one failure. With ``once`` the error propagates so the command exits
+        non-zero.
         """
         self.running = True
         previous = {s: signal.signal(s, self._stop) for s in (signal.SIGINT, signal.SIGTERM)}
@@ -157,7 +189,7 @@ class Scheduler:
                     self._step(
                         sync=not synced, rescue_due=rescue_due, maintenance_due=maintenance_due
                     )
-                except DatabaseError:
+                except Exception:
                     if once:
                         raise
                     logger.exception("Scheduler iteration failed; retrying in %ss", self.interval)

@@ -6,7 +6,6 @@ import overseer
 from overseer import registry
 from overseer.decorators import OverseerTask
 from overseer.scheduling import registry as schedules
-from overseer.scheduling.cron import CronError
 from tests import tasks
 
 pytestmark = pytest.mark.django_db
@@ -47,8 +46,12 @@ def test_schedule_validation():
         overseer.schedule("* * * * *", every=5)
     with pytest.raises(TypeError):
         overseer.schedule("* * * * *")(lambda: None)
-    with pytest.raises(CronError):
+    with pytest.raises(ValueError, match="invalid cron expression"):
         overseer.schedule("bad cron")(tasks.plain)
+    with pytest.raises(ValueError, match="unknown timezone"):
+        overseer.schedule("* * * * *", timezone="Nope/Zone")(tasks.plain)
+    with pytest.raises(ValueError, match="names a day"):
+        overseer.schedule("0 0 31 2 *")(tasks.plain)
 
 
 def test_lazy_exports():

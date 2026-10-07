@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 
 
@@ -23,11 +24,15 @@ _schedules: dict[str, ScheduleSpec] = {}
 
 
 def register(**kwargs) -> ScheduleSpec:
+    kwargs["args"] = json.loads(json.dumps(list(kwargs.get("args", ()))))
+    kwargs["kwargs"] = json.loads(json.dumps(dict(kwargs.get("kwargs") or {})))
     spec = ScheduleSpec(**kwargs)
-    if spec.cron:
-        from .cron import parse  # validate eagerly so a typo fails at import time
+    from .validation import check_schedule  # validate eagerly so a typo fails at import time
 
-        parse(spec.cron)
+    try:
+        check_schedule(spec)
+    except ValueError as exc:
+        raise ValueError(f"overseer.schedule {spec.name!r}: {exc}") from None
     _schedules[spec.name] = spec
     return spec
 

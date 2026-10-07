@@ -9,7 +9,8 @@ from dataclasses import dataclass
 from datetime import timedelta
 
 from django.core.mail import mail_admins, send_mail
-from django.db.models import Count, Max, Q
+from django.db.models import Count, Max, Min, Q
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 from django.utils.module_loading import import_string
 
@@ -61,19 +62,26 @@ def detect(now=None) -> list[Condition]:
                 )
 
     wait_threshold = conf.get_setting("OVERSEER_ALERT_WAIT_SECONDS")
-    waits = (
+    worst_wait: dict[str, float] = {}
+    started = (
         Run.objects.filter(started_at__gte=since, wait_ms__isnull=False)
         .values("job__queue_name")
         .annotate(worst=Max("wait_ms"))
     )
-    for row in waits:
-        worst = row["worst"] / 1000
+    for row in started:
+        worst_wait[row["job__queue_name"]] = row["worst"] / 1000
+    # Runs still waiting count too: a queue no worker serves never starts anything.
+    for row in oldest_waiting(now):
+        waited = (now - row["ready_since"]).total_seconds()
+        queue = row["job__queue_name"]
+        worst_wait[queue] = max(worst_wait.get(queue, 0.0), waited)
+    for queue, worst in sorted(worst_wait.items()):
         if worst > wait_threshold:
             found.append(
                 Condition(
                     "queue_wait",
-                    row["job__queue_name"],
-                    f"A task on queue {row['job__queue_name']!r} waited {worst:.0f}s to start",
+                    queue,
+                    f"A task on queue {queue!r} has waited {worst:.0f}s to start",
                     worst,
                     wait_threshold,
                 )
@@ -98,9 +106,17 @@ def detect(now=None) -> list[Condition]:
                 )
             )
 
+    # Only workers that send heartbeats (overseer_worker) can be judged offline: a plain
+    # db_worker is only seen when it runs a task, and never reports a clean stop.
     offline_after = timedelta(seconds=conf.get_setting("OVERSEER_WORKER_OFFLINE_AFTER"))
-    stale = Worker.objects.filter(stopped_at__isnull=True, last_seen_at__lt=now - offline_after)
-    for worker in stale:
+    candidates = Worker.objects.filter(
+        stopped_at__isnull=True,
+        heartbeat_seconds__isnull=False,
+        last_seen_at__lt=now - offline_after,
+    )
+    for worker in candidates:
+        if worker.is_online(now):
+            continue
         gone = (now - worker.last_seen_at).total_seconds()
         found.append(
             Condition(
@@ -108,10 +124,21 @@ def detect(now=None) -> list[Condition]:
                 worker.worker_id,
                 f"Worker {worker.worker_id} has not been seen for {gone:.0f}s",
                 gone,
-                offline_after.total_seconds(),
+                worker.offline_after(),
             )
         )
     return found
+
+
+def oldest_waiting(now):
+    """Per queue, when its longest-waiting ready run became ready (``ready_since``)."""
+    return (
+        Run.objects.filter(status=RunStatus.READY)
+        .annotate(ready_at=Coalesce("run_after", "enqueued_at"))
+        .filter(ready_at__lte=now)
+        .values("job__queue_name")
+        .annotate(ready_since=Min("ready_at"))
+    )
 
 
 def evaluate(now=None) -> list[Alert]:
@@ -143,7 +170,9 @@ def evaluate(now=None) -> list[Alert]:
         if key not in conditions:
             alert.resolved_at = now
             alert.save(update_fields=["resolved_at"])
-            signals.alert_resolved.send(sender=Alert, alert=alert)
+            for receiver, response in signals.alert_resolved.send_robust(sender=Alert, alert=alert):
+                if isinstance(response, Exception):
+                    logger.error("alert_resolved receiver %r failed", receiver, exc_info=response)
     return fired
 
 
@@ -169,14 +198,20 @@ def _notify_slack(alert: Alert):
 
 
 def notify(alert: Alert) -> None:
-    """Fan the alert out; a failing notifier is logged, never raised."""
-    signals.alert_fired.send(sender=Alert, alert=alert)
-    notifiers = [_notify_email, _notify_slack] + [
-        import_string(p) if isinstance(p, str) else p
-        for p in conf.get_setting("OVERSEER_NOTIFIERS")
-    ]
+    """Fan the alert out; a failing notifier or signal receiver is logged, never raised."""
+    for receiver, response in signals.alert_fired.send_robust(sender=Alert, alert=alert):
+        if isinstance(response, Exception):
+            logger.error(
+                "alert_fired receiver %r failed for alert %s",
+                receiver,
+                alert.pk,
+                exc_info=response,
+            )
+    notifiers = [_notify_email, _notify_slack, *conf.get_setting("OVERSEER_NOTIFIERS")]
     for notifier in notifiers:
         try:
+            if isinstance(notifier, str):
+                notifier = import_string(notifier)
             notifier(alert)
         except Exception:
             logger.exception("Overseer notifier %s failed for alert %s", notifier, alert.pk)

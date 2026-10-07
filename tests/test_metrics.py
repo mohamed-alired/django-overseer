@@ -156,7 +156,9 @@ class TestPrune:
         Job.objects.filter(pk=pending.pk).update(created_at=old)  # pending jobs are never pruned
         MetricBucket.objects.create(bucket_start=now - timedelta(days=3), queue_name="d")
         MetricBucket.objects.create(bucket_start=now, queue_name="d")
-        Alert.objects.create(kind="k", key="a", message="m", created_at=old)
+        Alert.objects.create(kind="k", key="a", message="m", created_at=old, resolved_at=old)
+        # Still open: kept, or a persisting condition would fire and notify again.
+        Alert.objects.create(kind="k", key="b", message="m", created_at=old)
         Worker.objects.create(worker_id="dead", last_seen_at=old)
         Worker.objects.create(worker_id="alive")
         call_command("overseer_prune")
@@ -164,7 +166,8 @@ class TestPrune:
         assert "jobs: 1" in out and "runs: 1" in out and "metric_buckets: 1" in out
         assert "alerts: 1" in out and "workers: 1" in out
         assert Job.objects.count() == 2 and Run.objects.count() == 1
-        assert MetricBucket.objects.count() == 1 and Alert.objects.count() == 0
+        assert MetricBucket.objects.count() == 1
+        assert list(Alert.objects.values_list("key", flat=True)) == ["b"]
         assert list(Worker.objects.values_list("worker_id", flat=True)) == ["alive"]
 
     def test_overrides(self):

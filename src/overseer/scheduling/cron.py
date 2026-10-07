@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import zoneinfo
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 ALIASES = {
     "@yearly": "0 0 1 1 *",
@@ -27,6 +27,9 @@ MONTHS = {
     )
 }
 WEEKDAYS = {d: i for i, d in enumerate(["sun", "mon", "tue", "wed", "thu", "fri", "sat"])}
+# Largest daylight-saving shift to look around (real zones shift by at most two hours).
+DST_MARGIN = timedelta(hours=3)
+MONTH_DAYS = {1: 31, 2: 29, 3: 31, 4: 30, 5: 31, 6: 30, 7: 31, 8: 31, 9: 30, 10: 31, 11: 30, 12: 31}
 FIELDS = (
     ("minute", 0, 59, {}),
     ("hour", 0, 23, {}),
@@ -105,28 +108,62 @@ class Cron:
             and self._day_matches(dt)
         )
 
+    def _instants(self, wall: datetime, zone) -> tuple[datetime, ...]:
+        """The real instants a matching wall-clock minute stands for in ``zone``.
+
+        Usually one. In a repeated hour (clocks going back) a wall time happens twice:
+        jobs that run every hour follow real time and fire in both passes, jobs pinned to
+        an hour fire once, in the first pass (vixie-cron's rule). A wall time inside a gap
+        (clocks going forward) does not exist; it fires at the same offset past the gap.
+        """
+        # Returned in UTC: aware datetimes sharing a tzinfo compare by wall clock and ignore
+        # ``fold``, which would make the two passes of a repeated hour compare as equal.
+        early = wall.replace(tzinfo=zone, fold=0)
+        late = wall.replace(tzinfo=zone, fold=1)
+        if early.utcoffset() == late.utcoffset():
+            return (early.astimezone(UTC),)
+        exists = early.astimezone(UTC).astimezone(zone).replace(tzinfo=None) == wall
+        if exists and len(self.hours) == 24:
+            return (early.astimezone(UTC), late.astimezone(UTC))
+        return (early.astimezone(UTC),)
+
     def next_after(self, after: datetime, tz: str | None = None) -> datetime:
-        """The first matching minute strictly after ``after`` (aware), evaluated in ``tz``."""
+        """The first matching instant strictly after ``after`` (aware), evaluated in ``tz``.
+
+        Wall-clock order and real-time order disagree around daylight-saving changes, so
+        the search starts a little before ``after`` in wall-clock time, resolves every
+        matching minute to real instants and keeps the earliest one after ``after``.
+        """
         if after.tzinfo is None:
             raise CronError("next_after() needs an aware datetime")
         zone = zoneinfo.ZoneInfo(tz) if tz else after.tzinfo
-        local = after.astimezone(zone).replace(second=0, microsecond=0) + timedelta(minutes=1)
-        limit = local + timedelta(days=366 * 5)
-        while local < limit:
-            if local.month not in self.months:
-                local = (local.replace(day=1, hour=0, minute=0) + timedelta(days=32)).replace(day=1)
+        wall = (
+            (after - DST_MARGIN)
+            .astimezone(zone)
+            .replace(tzinfo=None, second=0, microsecond=0, fold=0)
+        )
+        limit = wall + timedelta(days=366 * 5)
+        best = stop = None
+        while wall < limit and (stop is None or wall <= stop):
+            if wall.month not in self.months:
+                wall = (wall.replace(day=1, hour=0, minute=0) + timedelta(days=32)).replace(day=1)
                 continue
-            if not self._day_matches(local):
-                local = (local + timedelta(days=1)).replace(hour=0, minute=0)
+            if not self._day_matches(wall):
+                wall = (wall + timedelta(days=1)).replace(hour=0, minute=0)
                 continue
-            if local.hour not in self.hours:
-                local = (local + timedelta(hours=1)).replace(minute=0)
+            if wall.hour not in self.hours:
+                wall = (wall + timedelta(hours=1)).replace(minute=0)
                 continue
-            if local.minute not in self.minutes:
-                local += timedelta(minutes=1)
-                continue
-            return local.astimezone(after.tzinfo)
-        raise CronError(f"{self.expression!r} never fires within five years")
+            if wall.minute in self.minutes:
+                for instant in self._instants(wall, zone):
+                    if instant > after and (best is None or instant < best):
+                        best = instant
+                if best is not None and stop is None:
+                    stop = wall + DST_MARGIN
+            wall += timedelta(minutes=1)
+        if best is None:
+            raise CronError(f"{self.expression!r} never fires within five years")
+        return best.astimezone(after.tzinfo)
 
 
 def parse(expression: str) -> Cron:
@@ -138,13 +175,20 @@ def parse(expression: str) -> Cron:
         _parse_field(part, name, lo, hi, names)
         for part, (name, lo, hi, names) in zip(parts, FIELDS, strict=True)
     ]
-    return Cron(
+    cron = Cron(
         expression=expression,
         minutes=parsed[0],
         hours=parsed[1],
         days=parsed[2],
         months=parsed[3],
         weekdays=parsed[4],
-        day_restricted=parts[2] != "*",
-        weekday_restricted=parts[4] != "*",
+        # As in vixie-cron, a field starting with "*" (including "*/2") is unrestricted for
+        # the "day-of-month OR day-of-week" rule.
+        day_restricted=not parts[2].startswith("*"),
+        weekday_restricted=not parts[4].startswith("*"),
     )
+    if not cron.weekday_restricted and not any(
+        day <= MONTH_DAYS[month] for day in cron.days for month in cron.months
+    ):
+        raise CronError(f"{expression!r} names a day that none of its months has")
+    return cron

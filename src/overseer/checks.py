@@ -8,8 +8,13 @@ from . import conf, registry
 def check_backends_can_defer(app_configs, **kwargs):
     """Retries with a delay need ``supports_defer``; warn per backend that lacks it."""
     warnings = []
-    aliases = {p.backend for p in registry.all_policies().values() if p.retries}
-    if conf.get_setting("OVERSEER_DEFAULT_RETRIES"):
+    # Only policies that actually wait between attempts need a deferring backend.
+    aliases = {
+        p.backend for p in registry.all_policies().values() if p.retries and p.backoff_base > 0
+    }
+    if conf.get_setting("OVERSEER_DEFAULT_RETRIES") and conf.get_setting(
+        "OVERSEER_DEFAULT_BACKOFF_BASE"
+    ):
         aliases.add("default")
     for alias in sorted(aliases):
         try:

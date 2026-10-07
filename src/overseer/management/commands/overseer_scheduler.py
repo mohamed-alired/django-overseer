@@ -1,4 +1,4 @@
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 
 from overseer.scheduling.scheduler import Scheduler
 
@@ -18,6 +18,8 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        if options["interval"] is not None and options["interval"] <= 0:
+            raise CommandError("--interval must be a positive number of seconds")
         scheduler = Scheduler(interval=options["interval"])
         ticks = scheduler.run(once=options["once"])
         if options["once"]:

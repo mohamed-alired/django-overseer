@@ -86,15 +86,28 @@ class TestDetect:
 
     def test_worker_offline(self, settings):
         settings.OVERSEER_WORKER_OFFLINE_AFTER = 60
-        Worker.objects.create(worker_id="w-old", last_seen_at=timezone.now() - timedelta(minutes=5))
+        five_min_ago = timezone.now() - timedelta(minutes=5)
+        Worker.objects.create(worker_id="w-old", last_seen_at=five_min_ago, heartbeat_seconds=10)
         Worker.objects.create(
             worker_id="w-stopped",
             stopped_at=timezone.now(),
-            last_seen_at=timezone.now() - timedelta(minutes=5),
+            last_seen_at=five_min_ago,
+            heartbeat_seconds=10,
         )
-        Worker.objects.create(worker_id="w-fresh")
+        Worker.objects.create(worker_id="w-fresh", heartbeat_seconds=10)
+        # A plain db_worker (no heartbeats) is only seen when it runs a task: never offline.
+        Worker.objects.create(worker_id="w-plain", last_seen_at=five_min_ago)
         (cond,) = alerts.detect()
         assert cond.kind == "worker_offline" and cond.key == "w-old"
+
+    def test_slow_heartbeat_widens_the_offline_window(self, settings):
+        settings.OVERSEER_WORKER_OFFLINE_AFTER = 60
+        Worker.objects.create(
+            worker_id="w-slow",
+            last_seen_at=timezone.now() - timedelta(minutes=5),
+            heartbeat_seconds=120,  # offline only after 3 missed beats (6 minutes)
+        )
+        assert alerts.detect() == []
 
 
 class TestEvaluate:
