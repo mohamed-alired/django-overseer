@@ -8,7 +8,7 @@ import time
 from datetime import timedelta
 
 from django.conf import settings
-from django.db import transaction
+from django.db import DatabaseError, close_old_connections, transaction
 from django.utils import timezone
 from django.utils.module_loading import import_string
 
@@ -111,37 +111,64 @@ class Scheduler:
         logger.info("Scheduler received signal %s, stopping", signum)
         self.running = False
 
-    def run(self, *, once: bool = False, max_ticks: int | None = None) -> int:
+    def _step(self, *, sync: bool, rescue_due: bool, maintenance_due: bool) -> list[Job]:
+        """One iteration of the loop: sync (first time), fire due schedules, housekeeping."""
         from ..alerts import evaluate as evaluate_alerts
         from ..metrics import rollup
         from ..rescue import rescue
         from .sync import sync_schedules
 
-        sync_schedules()
+        if sync:
+            sync_schedules()
+        jobs = tick()
+        if jobs:
+            logger.info("Scheduler enqueued %d job(s)", len(jobs))
+        if rescue_due:
+            abandoned = rescue()
+            if abandoned:
+                logger.warning("Scheduler abandoned %d stale run(s)", len(abandoned))
+        if maintenance_due:
+            rollup()
+            evaluate_alerts()
+        return jobs
+
+    def run(self, *, once: bool = False, max_ticks: int | None = None) -> int:
+        """Loop until a signal arrives (or ``once`` / ``max_ticks``). Returns the tick count.
+
+        A database error (a locked SQLite file, a server restarting) is logged and the
+        loop carries on at the next interval; a scheduler never dies over a transient
+        failure. With ``once`` the error propagates so the command exits non-zero.
+        """
         self.running = True
         previous = {s: signal.signal(s, self._stop) for s in (signal.SIGINT, signal.SIGTERM)}
         ticks = 0
+        synced = False
         last_rescue = last_maintenance = None
         rescue_interval = conf.get_setting("OVERSEER_RESCUE_INTERVAL")
         maintenance_interval = conf.get_setting("OVERSEER_MAINTENANCE_INTERVAL")
         try:
             while self.running:
-                jobs = tick()
-                ticks += 1
-                if jobs:
-                    logger.info("Scheduler enqueued %d job(s)", len(jobs))
-                if last_rescue is None or time.monotonic() - last_rescue >= rescue_interval:
-                    abandoned = rescue()
-                    last_rescue = time.monotonic()
-                    if abandoned:
-                        logger.warning("Scheduler abandoned %d stale run(s)", len(abandoned))
-                if (
-                    last_maintenance is None
-                    or time.monotonic() - last_maintenance >= maintenance_interval
-                ):
-                    rollup()
-                    evaluate_alerts()
-                    last_maintenance = time.monotonic()
+                now = time.monotonic()
+                rescue_due = last_rescue is None or now - last_rescue >= rescue_interval
+                maintenance_due = (
+                    last_maintenance is None or now - last_maintenance >= maintenance_interval
+                )
+                try:
+                    self._step(
+                        sync=not synced, rescue_due=rescue_due, maintenance_due=maintenance_due
+                    )
+                except DatabaseError:
+                    if once:
+                        raise
+                    logger.exception("Scheduler iteration failed; retrying in %ss", self.interval)
+                    close_old_connections()
+                else:
+                    synced = True
+                    ticks += 1
+                    if rescue_due:
+                        last_rescue = now
+                    if maintenance_due:
+                        last_maintenance = now
                 if once or (max_ticks is not None and ticks >= max_ticks):
                     break
                 time.sleep(self.interval)

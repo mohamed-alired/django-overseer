@@ -5,7 +5,18 @@
 set -euo pipefail
 
 WORK=$(mktemp -d)
-trap 'kill $(jobs -p) 2>/dev/null || true; rm -rf "$WORK"' EXIT
+cleanup() {
+    status=$?
+    if [ "$status" -ne 0 ]; then
+        for log in worker.log scheduler.log server.log; do
+            [ -f "$log" ] && { echo "--- $log ---"; cat "$log"; }
+        done
+    fi
+    kill $(jobs -p) 2>/dev/null || true
+    rm -rf "$WORK"
+    exit "$status"
+}
+trap cleanup EXIT
 cd "$WORK"
 
 django-admin startproject demo .
@@ -19,6 +30,12 @@ s = s.replace("INSTALLED_APPS = [", 'INSTALLED_APPS = [\n    "django_tasks_db",\
 s += '''
 TASKS = {"default": {"BACKEND": "django_tasks_db.backend.DatabaseBackend", "QUEUES": ["default", "emails"]}}
 OVERSEER_WORKER_OFFLINE_AFTER = 30
+# Several processes write to this one SQLite file: the options the README recommends.
+DATABASES["default"]["OPTIONS"] = {
+    "timeout": 20,
+    "transaction_mode": "IMMEDIATE",
+    "init_command": "PRAGMA journal_mode=WAL;",
+}
 '''
 p.write_text(s)
 p = pathlib.Path("demo/urls.py")

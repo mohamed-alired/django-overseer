@@ -204,6 +204,36 @@ class TestSchedulerLoop:
         assert Schedule.objects.filter(name="heartbeat").exists()  # synced
         assert Job.objects.filter(args=[1]).count() == 1
 
+    # transaction=True: the loop closes the connection after a failure, which must not
+    # happen inside a test transaction (PostgreSQL would then fail every later query).
+    @pytest.mark.django_db(transaction=True)
+    def test_loop_survives_database_errors(self, monkeypatch, caplog):
+        from django.db import OperationalError
+
+        calls = []
+
+        def flaky_tick(now=None):
+            calls.append(1)
+            if len(calls) == 1:
+                raise OperationalError("database is locked")
+            return []
+
+        monkeypatch.setattr(scheduler, "tick", flaky_tick)
+        with caplog.at_level("ERROR", logger="overseer"):
+            ticks = scheduler.Scheduler(interval=0.01).run(max_ticks=2)
+        assert ticks == 2 and len(calls) == 3
+        assert "Scheduler iteration failed" in caplog.text
+
+    def test_once_propagates_database_errors(self, monkeypatch):
+        from django.db import OperationalError
+
+        def broken_tick(now=None):
+            raise OperationalError("database is locked")
+
+        monkeypatch.setattr(scheduler, "tick", broken_tick)
+        with pytest.raises(OperationalError):
+            scheduler.Scheduler(interval=0.01).run(once=True)
+
     def test_loop_stops_after_max_ticks(self, monkeypatch):
         monkeypatch.setattr(scheduler.time, "sleep", lambda s: None)
         assert scheduler.Scheduler(interval=0.01).run(max_ticks=3) == 3
