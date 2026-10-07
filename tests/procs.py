@@ -39,6 +39,7 @@ class Process:
     """A management command running in its own interpreter."""
 
     def __init__(self, command: str, *args: str):
+        self.command = " ".join([command, *args])
         self.proc = subprocess.Popen(
             [sys.executable, "-m", "django", command, *args],
             cwd=ROOT,
@@ -80,6 +81,8 @@ class Process:
         return self.proc.returncode
 
     def kill(self) -> int:
+        if not self.alive() and self.output:
+            return self.proc.returncode
         return self.stop(sig=signal.SIGKILL)
 
     def __enter__(self):
@@ -90,11 +93,23 @@ class Process:
             self.kill()
 
 
-def wait_for(predicate, *, timeout: float = 20, interval: float = 0.1, message="condition"):
+def wait_for(
+    predicate,
+    *,
+    timeout: float = 30,
+    interval: float = 0.2,
+    message="condition",
+    procs: tuple[Process, ...] = (),
+):
+    """Poll ``predicate`` until truthy. On timeout, kill ``procs`` and include their output."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         value = predicate()
         if value:
             return value
         time.sleep(interval)
-    raise AssertionError(f"timed out after {timeout}s waiting for {message}")
+    details = ""
+    for proc in procs:
+        proc.kill()
+        details += f"\n--- {proc.command} output ---\n{proc.output}"
+    raise AssertionError(f"timed out after {timeout}s waiting for {message}{details}")

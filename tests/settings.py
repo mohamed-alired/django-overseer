@@ -46,7 +46,10 @@ DATABASES = {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": _sqlite_file or ":memory:",
         "TEST": {"NAME": f"{_sqlite_file}.test" if _sqlite_file else None},
-        "OPTIONS": {"timeout": 20} if _sqlite_file else {},
+        # WAL lets the worker, scheduler and test process read and write concurrently.
+        "OPTIONS": {"timeout": 30, "init_command": "PRAGMA journal_mode=WAL;"}
+        if _sqlite_file
+        else {},
     }
 }
 if os.environ.get("OVERSEER_DB_NAME"):

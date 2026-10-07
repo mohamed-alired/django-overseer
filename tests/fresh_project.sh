@@ -14,15 +14,18 @@ python - <<'PY'
 import re, pathlib
 p = pathlib.Path("demo/settings.py")
 s = p.read_text()
-s = s.replace('"django.contrib.staticfiles",', '"django.contrib.staticfiles",\n    "django_tasks_db",\n    "overseer",\n    "shop",')
+assert "INSTALLED_APPS = [" in s, s
+s = s.replace("INSTALLED_APPS = [", 'INSTALLED_APPS = [\n    "django_tasks_db",\n    "overseer",\n    "shop",', 1)
 s += '''
 TASKS = {"default": {"BACKEND": "django_tasks_db.backend.DatabaseBackend", "QUEUES": ["default", "emails"]}}
 OVERSEER_WORKER_OFFLINE_AFTER = 30
 '''
 p.write_text(s)
 p = pathlib.Path("demo/urls.py")
-s = p.read_text().replace("from django.urls import path", "from django.urls import include, path")
-s = s.replace("urlpatterns = [", 'urlpatterns = [\n    path("overseer/", include("overseer.urls")),')
+s = p.read_text()
+assert "urlpatterns = [" in s, s
+s = "from django.urls import include\n" + s
+s = s.replace("urlpatterns = [", 'urlpatterns = [\n    path("overseer/", include("overseer.urls")),', 1)
 p.write_text(s)
 PY
 
@@ -50,6 +53,7 @@ def heartbeat():
 PY
 
 python manage.py check
+grep -q '"overseer"' demo/settings.py && grep -q "overseer.urls" demo/urls.py
 python manage.py migrate -v0
 python manage.py overseer_sync_schedules
 echo "from django.contrib.auth.models import User; User.objects.create_superuser('admin', 'a@x.com', 'pw')" | python manage.py shell

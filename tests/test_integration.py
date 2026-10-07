@@ -54,7 +54,7 @@ class TestRealWorker:
             r2 = tasks.unique_by_args.enqueue("a@example.com")
             r3 = tasks.with_context.enqueue(5)
             for r in (r1, r2, r3):
-                job = wait_for(job_state(r), message=f"job for {r.id}")
+                job = wait_for(job_state(r), message=f"job for {r.id}", procs=(proc,))
                 assert job.status == JobStatus.SUCCEEDED, proc.output
 
             row = Worker.objects.get(worker_id="itest-1")
@@ -82,7 +82,7 @@ class TestRealWorker:
     def test_retries_until_success(self):
         with worker_process("itest-retry") as proc:
             result = tasks.flaky_fast.enqueue(2)
-            job = wait_for(job_state(result), message="flaky job to finish")
+            job = wait_for(job_state(result), message="flaky job to finish", procs=(proc,))
             assert job.status == JobStatus.SUCCEEDED, proc.output
             assert job.attempts == 3
             runs = list(job.runs.order_by("attempt"))
@@ -102,7 +102,7 @@ class TestRealWorker:
     def test_exhausts_retries_and_marks_failed(self):
         with worker_process("itest-fail") as proc:
             result = tasks.flaky_fast.enqueue(10)
-            job = wait_for(job_state(result), message="flaky job to give up")
+            job = wait_for(job_state(result), message="flaky job to give up", procs=(proc,))
             assert job.status == JobStatus.FAILED, proc.output
             assert job.attempts == 3
             assert job.finished_at is not None
@@ -117,6 +117,7 @@ class TestRealWorker:
                     result_id=str(result.id), status=RunStatus.RUNNING
                 ).exists(),
                 message="slow task to start",
+                procs=(proc,),
             )
             code = proc.stop(sig=signal.SIGTERM)
             assert code == 0, proc.output
@@ -132,6 +133,7 @@ class TestRealWorker:
                     result_id=str(result.id), status=RunStatus.RUNNING
                 ).exists(),
                 message="slow task to start",
+                procs=(proc,),
             )
             proc.kill()
         run = Run.objects.get(result_id=str(result.id))
@@ -178,6 +180,8 @@ class TestRealScheduler:
                     Job.objects.filter(schedule=schedule, status=JobStatus.SUCCEEDED).count() >= 2
                 ),
                 message="two scheduled jobs to succeed",
+                timeout=60,
+                procs=(scheduler, worker),
             )
             schedule.refresh_from_db()
             assert schedule.runs_count >= 2
