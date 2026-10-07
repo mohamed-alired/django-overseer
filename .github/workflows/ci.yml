@@ -1,0 +1,113 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff
+      - run: ruff check src tests
+      - run: ruff format --check src tests
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+        django-version: ["6.0", "6.1", "main"]
+    name: test (py${{ matrix.python-version }}, django ${{ matrix.django-version }})
+    continue-on-error: ${{ matrix.django-version == 'main' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test]"
+          if [ "${{ matrix.django-version }}" = "main" ]; then
+            pip install "https://github.com/django/django/archive/main.tar.gz"
+          else
+            pip install "django~=${{ matrix.django-version }}.0"
+          fi
+          python -c "import django; print(django.get_version())"
+      - name: Check migrations are up to date
+        env:
+          DJANGO_SETTINGS_MODULE: tests.settings
+          PYTHONPATH: src:.
+        run: python -m django makemigrations overseer --check --dry-run
+      - name: Unit, dashboard, E2E and performance tests (SQLite in memory)
+        run: pytest --cov --cov-report=term-missing
+      - name: Integration tests with real worker and scheduler processes (SQLite file)
+        env:
+          OVERSEER_SQLITE_FILE: ${{ runner.temp }}/overseer.sqlite3
+        run: pytest tests/test_integration.py -q
+
+  test-postgres:
+    # Real SELECT ... FOR UPDATE SKIP LOCKED: the concurrency tests only run here.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python-version: "3.12"
+            django-version: "6.0"
+          - python-version: "3.13"
+            django-version: "6.1"
+    name: test-postgres (py${{ matrix.python-version }}, django ${{ matrix.django-version }})
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: overseer
+          POSTGRES_PASSWORD: overseer
+          POSTGRES_DB: overseer
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U overseer" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      PGHOST: 127.0.0.1
+      PGUSER: overseer
+      PGPASSWORD: overseer
+      PGDATABASE: overseer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test]" "django~=${{ matrix.django-version }}.0" "psycopg[binary]"
+      - name: Whole suite on PostgreSQL (unit, concurrency, integration, E2E, perf)
+        run: pytest --ds=tests.settings_postgres
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install build twine
+      - run: python -m build && twine check dist/*
+      - name: Install the wheel into a fresh project and smoke-test it
+        run: |
+          python -m venv /tmp/fresh && . /tmp/fresh/bin/activate
+          pip install dist/*.whl "django-tasks-db>=0.13" requests
+          bash tests/fresh_project.sh

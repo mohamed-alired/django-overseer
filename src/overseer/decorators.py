@@ -133,6 +133,7 @@ def task(
             queue_name=django_decorated.queue_name,
             backend=django_decorated.backend,
             takes_context=django_decorated.takes_context,
+            run_after=django_decorated.run_after,  # required in 6.0, defaulted in 6.1
         )
         defaults = registry.get_policy("__defaults__")
         policy = TaskPolicy(
