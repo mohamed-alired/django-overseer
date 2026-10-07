@@ -1,0 +1,7 @@
+{% extends "overseer/base.html" %}
+{% block title %}Queues · Overseer{% endblock %}
+{% block heading %}Queues{% endblock %}
+{% block meta %}{% include "overseer/_window.html" %}{% endblock %}
+{% block content %}
+<div class="panel" data-refresh-id="queues" data-refresh-every="{{ refresh_seconds }}">{% include "overseer/_queues_table.html" %}</div>
+{% endblock %}

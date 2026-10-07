@@ -1,0 +1,15 @@
+{% extends "overseer/base.html" %}{% load overseer_extras %}
+{% block title %}Alerts · Overseer{% endblock %}
+{% block heading %}Alerts{% endblock %}
+{% block content %}
+<div data-refresh-id="alerts" data-refresh-every="{{ refresh_seconds }}">
+<div class="panel"><h2>Open</h2>
+  {% if open_alerts %}<table>{% for a in open_alerts %}<tr><td><span class="badge FAILED">{{ a.kind }}</span></td><td class="mono">{{ a.key }}</td><td>{{ a.message }}</td><td class="muted">{{ a.created_at|ago }}</td></tr>{% endfor %}</table>
+  {% else %}<div class="empty">No open alerts.</div>{% endif %}
+</div>
+<div class="panel"><h2>Resolved</h2>
+  {% if resolved %}<table>{% for a in resolved %}<tr><td><span class="badge CANCELLED">{{ a.kind }}</span></td><td class="mono">{{ a.key }}</td><td>{{ a.message }}</td><td class="muted">{{ a.created_at|ago }} → {{ a.resolved_at|ago }}</td></tr>{% endfor %}</table>
+  {% else %}<div class="empty">Nothing resolved yet.</div>{% endif %}
+</div>
+</div>
+{% endblock %}

@@ -1,0 +1,23 @@
+{% extends "overseer/base.html" %}{% load overseer_extras %}
+{% block title %}Workers · Overseer{% endblock %}
+{% block heading %}Workers{% endblock %}
+{% block content %}
+<div class="panel" data-refresh-id="workers" data-refresh-every="{{ refresh_seconds }}">
+{% if workers %}
+<table>
+  <tr><th>Worker</th><th>Host</th><th>State</th><th>Queues</th><th>Current task</th><th class="num">Processed</th><th class="num">Failed</th><th>Started</th><th>Last seen</th></tr>
+  {% for w in workers %}
+  <tr>
+    <td class="mono"><a href="{% url 'overseer:jobs' %}?worker={{ w.worker_id|urlencode }}">{{ w.worker_id }}</a></td>
+    <td>{{ w.hostname|default:"–" }}{% if w.pid %} <span class="muted">pid {{ w.pid }}</span>{% endif %}</td>
+    <td><span class="badge {% if w.state == 'online' %}SUCCESSFUL{% elif w.state == 'offline' %}FAILED{% else %}CANCELLED{% endif %}">{{ w.state }}</span></td>
+    <td>{{ w.queues|join:", "|default:"–" }}</td>
+    <td>{% if w.current_run %}<a href="{% url 'overseer:job' w.current_run.job.pk %}">{{ w.current_run.job.task_name }}</a> <span class="muted">{{ w.current_run.started_at|ago }}</span>{% else %}<span class="muted">idle</span>{% endif %}</td>
+    <td class="num">{{ w.tasks_processed }}</td><td class="num">{{ w.tasks_failed }}</td>
+    <td>{{ w.started_at|ago }}</td><td>{{ w.last_seen_at|ago }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}<div class="empty">No workers seen yet. Start one with <code>manage.py overseer_worker</code> (or <code>db_worker</code>).</div>{% endif %}
+</div>
+{% endblock %}

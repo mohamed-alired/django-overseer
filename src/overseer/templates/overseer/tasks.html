@@ -1,0 +1,21 @@
+{% extends "overseer/base.html" %}{% load overseer_extras %}
+{% block title %}Tasks · Overseer{% endblock %}
+{% block heading %}Tasks{% endblock %}
+{% block meta %}{% include "overseer/_window.html" %}{% endblock %}
+{% block content %}
+<div class="panel" data-refresh-id="tasks" data-refresh-every="{{ refresh_seconds }}">
+{% if tasks %}
+<table>
+  <tr><th>Task</th><th class="num">Processed</th><th class="num">Succeeded</th><th class="num">Failed</th><th class="num">Failure rate</th><th class="num">Avg runtime</th><th class="num">Max runtime</th><th>Last run</th></tr>
+  {% for t in tasks %}
+  <tr>
+    <td><a href="{% url 'overseer:jobs' %}?task={{ t.task_path|urlencode }}">{{ t.task_name }}</a><br><span class="muted mono">{{ t.task_path }}</span></td>
+    <td class="num">{{ t.processed }}</td><td class="num">{{ t.succeeded }}</td><td class="num">{{ t.failed }}</td>
+    <td class="num">{{ t.failure_rate|pct }}</td><td class="num">{{ t.runtime_avg_ms|ms }}</td><td class="num">{{ t.runtime_max_ms|ms }}</td>
+    <td>{{ t.last_run|ago }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}<div class="empty">No finished runs in this window.</div>{% endif %}
+</div>
+{% endblock %}

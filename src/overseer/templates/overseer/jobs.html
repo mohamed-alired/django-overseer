@@ -1,0 +1,37 @@
+{% extends "overseer/base.html" %}{% load overseer_extras %}
+{% block title %}Jobs · Overseer{% endblock %}
+{% block heading %}Jobs{% endblock %}
+{% block meta %}{{ page.paginator.count }} matching{% endblock %}
+{% block content %}
+<form class="filters" method="get">
+  <input type="search" name="q" value="{{ filters.search|default:'' }}" placeholder="Search task, id, key…">
+  <select name="status"><option value="">Any status</option>{% for value, label in statuses %}<option value="{{ value }}" {% if filters.status == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select>
+  <select name="queue"><option value="">Any queue</option>{% for q in queue_names %}<option value="{{ q }}" {% if filters.queue_name == q %}selected{% endif %}>{{ q }}</option>{% endfor %}</select>
+  <select name="task"><option value="">Any task</option>{% for t in task_paths %}<option value="{{ t }}" {% if filters.task_path == t %}selected{% endif %}>{{ t }}</option>{% endfor %}</select>
+  {% if filters.worker_id %}<input type="hidden" name="worker" value="{{ filters.worker_id }}">{% endif %}
+  <button class="btn primary" type="submit">Filter</button>
+  <a class="btn" href="{% url 'overseer:jobs' %}">Reset</a>
+</form>
+<div class="panel" data-refresh-id="jobs" data-refresh-every="{{ refresh_seconds }}">
+{% if page.object_list %}
+<table>
+  <tr><th>Task</th><th>Queue</th><th>Status</th><th class="num">Attempts</th><th>Source</th><th>Created</th><th>Last run</th></tr>
+  {% for job in page.object_list %}
+  <tr>
+    <td><a href="{% url 'overseer:job' job.pk %}">{{ job.task_name }}</a> <span class="muted mono">{{ job.pk|short_id }}</span></td>
+    <td>{{ job.queue_name }}</td>
+    <td><span class="badge {{ job.status }}">{{ job.get_status_display }}</span>{% if job.next_retry_at %} <span class="muted">retry {{ job.next_retry_at|ago }}</span>{% endif %}</td>
+    <td class="num">{{ job.attempts }}{% if job.max_retries %}<span class="muted"> / {{ job.max_retries|add:1 }}</span>{% endif %}</td>
+    <td>{{ job.get_source_display }}{% if job.schedule %} <span class="muted">({{ job.schedule.name }})</span>{% endif %}</td>
+    <td>{{ job.created_at|ago }}</td><td>{{ job.last_run_at|ago }}</td>
+  </tr>
+  {% endfor %}
+</table>
+<div class="pagination">
+  {% if page.has_previous %}<a href="?{% querystring page=page.previous_page_number %}">‹ newer</a>{% endif %}
+  <span>page {{ page.number }} of {{ page.paginator.num_pages }}</span>
+  {% if page.has_next %}<a href="?{% querystring page=page.next_page_number %}">older ›</a>{% endif %}
+</div>
+{% else %}<div class="empty">No jobs match.</div>{% endif %}
+</div>
+{% endblock %}

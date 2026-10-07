@@ -1,0 +1,36 @@
+{% load static overseer_extras %}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Overseer{% endblock %}</title>
+  <link rel="stylesheet" href="{% static 'overseer/overseer.css' %}">
+</head>
+<body>
+<div class="ov-shell">
+  <nav class="ov-nav">
+    <div class="brand"><span class="dot"></span> Overseer</div>
+    <a class="item {% if section == 'overview' %}active{% endif %}" href="{% url 'overseer:overview' %}">Overview</a>
+    <a class="item {% if section == 'queues' %}active{% endif %}" href="{% url 'overseer:queues' %}">Queues</a>
+    <a class="item {% if section == 'tasks' %}active{% endif %}" href="{% url 'overseer:tasks' %}">Tasks</a>
+    <a class="item {% if section == 'jobs' %}active{% endif %}" href="{% url 'overseer:jobs' %}">Jobs</a>
+    <a class="item {% if section == 'failed' %}active{% endif %}" href="{% url 'overseer:failed' %}">Failed <span class="count">{{ nav_failed }}</span></a>
+    <a class="item {% if section == 'schedules' %}active{% endif %}" href="{% url 'overseer:schedules' %}">Schedules</a>
+    <a class="item {% if section == 'workers' %}active{% endif %}" href="{% url 'overseer:workers' %}">Workers</a>
+    <a class="item {% if section == 'metrics' %}active{% endif %}" href="{% url 'overseer:metrics' %}">Metrics</a>
+    <a class="item {% if section == 'alerts' %}active{% endif %}" href="{% url 'overseer:alerts' %}">Alerts <span class="count">{{ nav_alerts }}</span></a>
+    <p class="muted" style="margin:18px 10px 0;font-size:12px">Updated <span data-updated-at>{{ now|time:"H:i:s" }}</span>
+      <button class="btn" id="ov-pause" type="button" style="margin-left:6px;padding:2px 8px;font-size:11px">Pause</button></p>
+  </nav>
+  <main class="ov-main">
+    {% if messages %}{% for m in messages %}<div class="msg {% if m.tags == 'error' %}error{% endif %}">{{ m }}</div>{% endfor %}{% endif %}
+    <div class="ov-head">
+      <h1>{% block heading %}{% endblock %}</h1>
+      <div class="meta">{% block meta %}{% endblock %}</div>
+    </div>
+    {% block content %}{% endblock %}
+  </main>
+</div>
+<script src="{% static 'overseer/overseer.js' %}"></script>
+</body>
+</html>

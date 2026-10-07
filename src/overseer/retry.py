@@ -10,7 +10,7 @@ from django.tasks import task_backends
 from django.utils import timezone
 from django.utils.module_loading import import_string
 
-from . import registry
+from . import registry, signals
 from .models import Job, JobSource, JobStatus, Run, RunStatus
 
 logger = logging.getLogger("overseer")
@@ -98,6 +98,8 @@ def handle_failure(job: Job, run: Run) -> Run | None:
         finished_at=run.finished_at or timezone.now(),
         next_retry_at=None,
     )
+    job.status = JobStatus.FAILED
+    signals.job_failed.send(sender=Job, job=job, run=run)
     return None
 
 

@@ -112,6 +112,8 @@ class Scheduler:
         self.running = False
 
     def run(self, *, once: bool = False, max_ticks: int | None = None) -> int:
+        from ..alerts import evaluate as evaluate_alerts
+        from ..metrics import rollup
         from ..rescue import rescue
         from .sync import sync_schedules
 
@@ -119,8 +121,9 @@ class Scheduler:
         self.running = True
         previous = {s: signal.signal(s, self._stop) for s in (signal.SIGINT, signal.SIGTERM)}
         ticks = 0
-        last_rescue = None
+        last_rescue = last_maintenance = None
         rescue_interval = conf.get_setting("OVERSEER_RESCUE_INTERVAL")
+        maintenance_interval = conf.get_setting("OVERSEER_MAINTENANCE_INTERVAL")
         try:
             while self.running:
                 jobs = tick()
@@ -132,6 +135,13 @@ class Scheduler:
                     last_rescue = time.monotonic()
                     if abandoned:
                         logger.warning("Scheduler abandoned %d stale run(s)", len(abandoned))
+                if (
+                    last_maintenance is None
+                    or time.monotonic() - last_maintenance >= maintenance_interval
+                ):
+                    rollup()
+                    evaluate_alerts()
+                    last_maintenance = time.monotonic()
                 if once or (max_ticks is not None and ticks >= max_ticks):
                     break
                 time.sleep(self.interval)

@@ -1,0 +1,50 @@
+{% extends "overseer/base.html" %}{% load overseer_extras %}
+{% block title %}Overview · Overseer{% endblock %}
+{% block heading %}Overview{% endblock %}
+{% block meta %}{% include "overseer/_window.html" %}{% endblock %}
+{% block content %}
+<div data-refresh-id="overview" data-refresh-every="{{ refresh_seconds }}">
+  <div class="cards">
+    <div class="card"><div class="label">Throughput</div><div class="value">{{ overview.throughput_per_min }}</div><div class="sub">runs / min · {{ overview.processed }} in window</div></div>
+    <div class="card"><div class="label">Failure rate</div><div class="value">{{ overview.failure_rate|pct }}</div><div class="sub">{{ overview.failed }} failed</div></div>
+    <div class="card"><div class="label">Avg runtime</div><div class="value">{{ overview.runtime_avg_ms|ms }}</div><div class="sub">max {{ overview.runtime_max_ms|ms }}</div></div>
+    <div class="card"><div class="label">Waiting</div><div class="value">{{ overview.waiting }}</div><div class="sub">{{ overview.scheduled }} scheduled later</div></div>
+    <div class="card"><div class="label">Running</div><div class="value">{{ overview.running }}</div><div class="sub">{{ overview.workers_online }} / {{ overview.workers_total }} workers online</div></div>
+    <div class="card"><div class="label">Needs attention</div><div class="value">{{ overview.failed_jobs_open }}</div><div class="sub">failed jobs · {{ overview.open_alerts }} open alerts</div></div>
+  </div>
+
+  <div class="panel">
+    <h2>Runs per minute</h2>
+    {% if points_max %}
+    <div class="sparkline" title="green = succeeded, red = failed">
+      {% for p in points %}<span class="{% if p.failed > p.succeeded %}fail{% endif %}" style="height:{{ p.succeeded|add:p.failed|bar_width:points_max }}%" title="{{ p.at|time:'H:i' }}: {{ p.succeeded }} ok, {{ p.failed }} failed"></span>{% endfor %}
+    </div>
+    {% else %}<div class="empty">No finished runs in this window yet. Metrics are rolled up by the scheduler every minute.</div>{% endif %}
+  </div>
+
+  <div class="panel">
+    <h2>Queues</h2>
+    {% include "overseer/_queues_table.html" %}
+  </div>
+
+  <div class="panel">
+    <h2>Recent failures</h2>
+    {% if recent_failures %}
+    <table>
+      <tr><th>Task</th><th>Queue</th><th class="num">Attempts</th><th>Failed</th></tr>
+      {% for job in recent_failures %}
+      <tr><td><a href="{% url 'overseer:job' job.pk %}">{{ job.task_name }}</a> <span class="muted mono">{{ job.pk|short_id }}</span></td>
+        <td>{{ job.queue_name }}</td><td class="num">{{ job.attempts }}</td><td>{{ job.finished_at|ago }}</td></tr>
+      {% endfor %}
+    </table>
+    {% else %}<div class="empty">Nothing failed. 🎉</div>{% endif %}
+  </div>
+
+  {% if alerts %}
+  <div class="panel">
+    <h2>Open alerts</h2>
+    <table>{% for a in alerts %}<tr><td><span class="badge FAILED">{{ a.kind }}</span></td><td>{{ a.message }}</td><td class="muted">{{ a.created_at|ago }}</td></tr>{% endfor %}</table>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

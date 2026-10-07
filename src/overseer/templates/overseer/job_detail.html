@@ -1,0 +1,52 @@
+{% extends "overseer/base.html" %}{% load overseer_extras %}
+{% block title %}{{ job.task_name }} · Overseer{% endblock %}
+{% block heading %}{{ job.task_name }} <span class="badge {{ job.status }}">{{ job.get_status_display }}</span>{% endblock %}
+{% block meta %}<span class="mono">{{ job.pk }}</span>{% endblock %}
+{% block content %}
+<div class="panel">
+  <div class="actions">
+    {% if can_manage_jobs %}
+      {% if job.can_retry %}<form method="post" action="{% url 'overseer:job-retry' job.pk %}">{% csrf_token %}<input type="hidden" name="next" value="{{ request.path }}"><button class="btn primary">Retry now</button></form>{% endif %}
+      {% if can_cancel %}<form method="post" action="{% url 'overseer:job-cancel' job.pk %}" data-confirm="Cancel this job?">{% csrf_token %}<input type="hidden" name="next" value="{{ request.path }}"><button class="btn danger">Cancel</button></form>{% endif %}
+      {% if job.status == 'FAILED' and not job.dismissed %}<form method="post" action="{% url 'overseer:job-dismiss' job.pk %}">{% csrf_token %}<input type="hidden" name="next" value="{{ request.path }}"><button class="btn">Dismiss</button></form>{% endif %}
+    {% endif %}
+    <a class="btn" href="{% url 'overseer:jobs' %}?task={{ job.task_path|urlencode }}">All runs of this task</a>
+  </div>
+</div>
+<div class="panel">
+  <h2>Job</h2>
+  <dl class="kv">
+    <dt>Task</dt><dd class="mono">{{ job.task_path }}</dd>
+    <dt>Queue / backend</dt><dd>{{ job.queue_name }} / {{ job.backend }} · priority {{ job.priority }}</dd>
+    <dt>Args</dt><dd><code>{{ job.args }}</code></dd>
+    <dt>Kwargs</dt><dd><code>{{ job.kwargs }}</code></dd>
+    <dt>Source</dt><dd>{{ job.get_source_display }}{% if job.schedule %} · schedule <a href="{% url 'overseer:schedules' %}">{{ job.schedule.name }}</a>{% endif %}</dd>
+    <dt>Attempts</dt><dd>{{ job.attempts }} of {{ job.max_retries|add:1 }}{% if job.next_retry_at %} · next retry {{ job.next_retry_at|ago }}{% endif %}</dd>
+    {% if job.unique_key %}<dt>Unique key</dt><dd class="mono">{{ job.unique_key }}</dd>{% endif %}
+    {% if job.tags %}<dt>Tags</dt><dd>{{ job.tags|join:", " }}</dd>{% endif %}
+    <dt>Created</dt><dd>{{ job.created_at }} ({{ job.created_at|ago }})</dd>
+    {% if job.finished_at %}<dt>Finished</dt><dd>{{ job.finished_at }} ({{ job.finished_at|ago }})</dd>{% endif %}
+  </dl>
+</div>
+<div class="panel" data-refresh-id="runs" data-refresh-every="{{ refresh_seconds }}">
+  <h2>Attempts</h2>
+  <table>
+    <tr><th class="num">#</th><th>Status</th><th>Enqueued</th><th>Started</th><th>Finished</th><th class="num">Wait</th><th class="num">Runtime</th><th>Worker</th><th>Result id</th></tr>
+    {% for run in runs %}
+    <tr>
+      <td class="num">{{ run.attempt }}</td>
+      <td><span class="badge {{ run.status }}">{{ run.get_status_display }}</span></td>
+      <td>{{ run.enqueued_at|ago }}{% if run.run_after %}<br><span class="muted">after {{ run.run_after|ago }}</span>{% endif %}</td>
+      <td>{{ run.started_at|ago }}</td><td>{{ run.finished_at|ago }}</td>
+      <td class="num">{{ run.wait_ms|ms }}</td><td class="num">{{ run.duration_ms|ms }}</td>
+      <td class="mono">{{ run.worker_id|default:"–" }}</td><td class="mono">{{ run.result_id }}</td>
+    </tr>
+    {% if run.exception_class %}
+    <tr><td></td><td colspan="8"><strong class="mono">{{ run.exception_class }}</strong><pre>{{ run.traceback }}</pre></td></tr>
+    {% elif run.status == 'SUCCESSFUL' and run.return_value is not None %}
+    <tr><td></td><td colspan="8" class="muted">returned <code>{{ run.return_value }}</code></td></tr>
+    {% endif %}
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

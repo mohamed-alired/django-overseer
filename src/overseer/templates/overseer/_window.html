@@ -1,0 +1,6 @@
+<form class="filters" method="get">
+  {% for extra_name, extra_value in extra_params %}<input type="hidden" name="{{ extra_name }}" value="{{ extra_value }}">{% endfor %}
+  <select name="minutes" onchange="this.form.submit()">
+    {% for w in windows %}<option value="{{ w }}" {% if w == minutes %}selected{% endif %}>Last {% if w >= 60 %}{{ w|floatformat:0|add:0 }}{% endif %}{% if w == 15 %}15 min{% elif w == 60 %}hour{% elif w == 360 %}6 hours{% else %}24 hours{% endif %}</option>{% endfor %}
+  </select>
+</form>

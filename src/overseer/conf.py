@@ -36,6 +36,8 @@ DEFAULTS = {
     "OVERSEER_SCHEDULER_INTERVAL": 1.0,
     # How often the scheduler loop looks for abandoned runs (seconds).
     "OVERSEER_RESCUE_INTERVAL": 30.0,
+    # How often the scheduler loop rolls up metrics and evaluates alerts (seconds).
+    "OVERSEER_MAINTENANCE_INTERVAL": 60.0,
     "OVERSEER_SCHEDULER_TIMEZONE": None,  # None = settings.TIME_ZONE
 }
 

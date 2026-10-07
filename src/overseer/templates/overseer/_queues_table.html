@@ -1,0 +1,15 @@
+{% load overseer_extras %}
+{% if queues %}
+<table>
+  <tr><th>Queue</th><th class="num">Waiting</th><th class="num">Running</th><th class="num">Scheduled</th><th class="num">Processed</th><th class="num">Failed</th><th class="num">Avg wait</th><th class="num">Avg runtime</th><th class="num">In backend</th></tr>
+  {% for q in queues %}
+  <tr>
+    <td><a href="{% url 'overseer:jobs' %}?queue={{ q.queue_name|urlencode }}">{{ q.queue_name }}</a></td>
+    <td class="num">{{ q.waiting }}</td><td class="num">{{ q.running }}</td><td class="num">{{ q.scheduled }}</td>
+    <td class="num">{{ q.processed }}</td><td class="num">{{ q.failed }}</td>
+    <td class="num">{{ q.wait_avg_ms|ms }}</td><td class="num">{{ q.runtime_avg_ms|ms }}</td>
+    <td class="num">{% if q.backend_depth is None %}–{% else %}{{ q.backend_depth }}{% endif %}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}<div class="empty">No queues seen yet. Enqueue a task and it will appear here.</div>{% endif %}

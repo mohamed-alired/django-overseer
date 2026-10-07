@@ -1,0 +1,37 @@
+{% extends "overseer/base.html" %}{% load overseer_extras %}
+{% block title %}Failed · Overseer{% endblock %}
+{% block heading %}Failed jobs{% endblock %}
+{% block meta %}{{ total }} open{% endblock %}
+{% block content %}
+{% if can_manage_jobs and total %}
+<div class="panel"><div class="actions">
+  <form method="post" action="{% url 'overseer:failed-retry-all' %}" data-confirm="Retry every failed job?">{% csrf_token %}<button class="btn primary">Retry all</button></form>
+  <form method="post" action="{% url 'overseer:failed-dismiss-all' %}" data-confirm="Dismiss every failed job from this list?">{% csrf_token %}<button class="btn">Dismiss all</button></form>
+</div></div>
+{% endif %}
+<div class="panel" data-refresh-id="failed" data-refresh-every="{{ refresh_seconds }}">
+{% if rows %}
+<table>
+  <tr><th>Task</th><th>Queue</th><th>Error</th><th class="num">Attempts</th><th>Failed</th>{% if can_manage_jobs %}<th></th>{% endif %}</tr>
+  {% for row in rows %}
+  <tr>
+    <td><a href="{% url 'overseer:job' row.job.pk %}">{{ row.job.task_name }}</a><br><span class="muted mono">{{ row.job.pk|short_id }} · {{ row.job.args }} {{ row.job.kwargs }}</span></td>
+    <td>{{ row.job.queue_name }}</td>
+    <td class="mono">{{ row.run.exception_class|default:"–" }}</td>
+    <td class="num">{{ row.job.attempts }}</td>
+    <td>{{ row.job.finished_at|ago }}</td>
+    {% if can_manage_jobs %}<td class="actions">
+      <form method="post" action="{% url 'overseer:job-retry' row.job.pk %}">{% csrf_token %}<button class="btn">Retry</button></form>
+      <form method="post" action="{% url 'overseer:job-dismiss' row.job.pk %}">{% csrf_token %}<button class="btn">Dismiss</button></form>
+    </td>{% endif %}
+  </tr>
+  {% endfor %}
+</table>
+<div class="pagination">
+  {% if page.has_previous %}<a href="?page={{ page.previous_page_number }}">‹ newer</a>{% endif %}
+  <span>page {{ page.number }} of {{ page.paginator.num_pages }}</span>
+  {% if page.has_next %}<a href="?page={{ page.next_page_number }}">older ›</a>{% endif %}
+</div>
+{% else %}<div class="empty">No failed jobs. 🎉</div>{% endif %}
+</div>
+{% endblock %}

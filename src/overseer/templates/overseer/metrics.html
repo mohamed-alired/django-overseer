@@ -1,0 +1,34 @@
+{% extends "overseer/base.html" %}{% load overseer_extras %}
+{% block title %}Metrics · Overseer{% endblock %}
+{% block heading %}Metrics{% endblock %}
+{% block meta %}
+<form class="filters" method="get">
+  <select name="queue" onchange="this.form.submit()"><option value="">All queues</option>{% for q in queue_names %}<option value="{{ q }}" {% if queue == q %}selected{% endif %}>{{ q }}</option>{% endfor %}</select>
+  <select name="minutes" onchange="this.form.submit()">{% for w in windows %}<option value="{{ w }}" {% if w == minutes %}selected{% endif %}>Last {{ w }} min</option>{% endfor %}</select>
+</form>
+{% endblock %}
+{% block content %}
+<div data-refresh-id="metrics" data-refresh-every="{{ refresh_seconds }}">
+<div class="cards">
+  <div class="card"><div class="label">Enqueued</div><div class="value">{{ totals.enqueued }}</div></div>
+  <div class="card"><div class="label">Processed</div><div class="value">{{ totals.processed }}</div></div>
+  <div class="card"><div class="label">Failed</div><div class="value">{{ totals.failed }}</div></div>
+</div>
+<div class="panel"><h2>Runs per minute</h2>
+  {% if points_max %}<div class="sparkline">{% for p in points %}<span class="{% if p.failed > p.succeeded %}fail{% endif %}" style="height:{{ p.succeeded|add:p.failed|bar_width:points_max }}%" title="{{ p.at|time:'H:i' }}: {{ p.succeeded }} ok, {{ p.failed }} failed"></span>{% endfor %}</div>
+  {% else %}<div class="empty">No data in this window.</div>{% endif %}
+</div>
+<div class="panel"><h2>Runtime p95 per minute</h2>
+  {% if runtime_max %}<div class="sparkline">{% for p in points %}<span style="height:{{ p.runtime_p95_ms|bar_width:runtime_max }}%" title="{{ p.at|time:'H:i' }}: {{ p.runtime_p95_ms|ms }}"></span>{% endfor %}</div>
+  {% else %}<div class="empty">No data in this window.</div>{% endif %}
+</div>
+<div class="panel"><h2>Per minute</h2>
+  <table>
+    <tr><th>Minute</th><th class="num">Enqueued</th><th class="num">Started</th><th class="num">Succeeded</th><th class="num">Failed</th><th class="num">Runtime p95</th><th class="num">Max wait</th></tr>
+    {% for p in points reversed %}{% if p.enqueued or p.started or p.succeeded or p.failed %}
+    <tr><td>{{ p.at|time:"H:i" }}</td><td class="num">{{ p.enqueued }}</td><td class="num">{{ p.started }}</td><td class="num">{{ p.succeeded }}</td><td class="num">{{ p.failed }}</td><td class="num">{{ p.runtime_p95_ms|ms }}</td><td class="num">{{ p.wait_max_ms|ms }}</td></tr>
+    {% endif %}{% endfor %}
+  </table>
+</div>
+</div>
+{% endblock %}
