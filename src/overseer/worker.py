@@ -6,14 +6,17 @@ import logging
 import os
 import socket
 import threading
+import time
 
-from django.db import close_old_connections, connections
+from django.db import OperationalError, close_old_connections, connections
 from django.utils import timezone
 from django_tasks_db.management.commands.db_worker import Worker as DBWorker
 
 from .models import Worker
 
 logger = logging.getLogger("overseer")
+
+REGISTER_ATTEMPTS = 5
 
 
 class HeartbeatWorker(DBWorker):
@@ -30,7 +33,23 @@ class HeartbeatWorker(DBWorker):
         self._stop_heartbeat = threading.Event()
         self._thread: threading.Thread | None = None
 
-    def register(self) -> Worker:
+    def register(self) -> Worker | None:
+        """Create or revive this worker's row. A transient database error (a locked SQLite
+        file, a restarting server) is retried, then logged: the recorders will create the
+        row on the first task anyway, so a worker never refuses to start over it."""
+        for attempt in range(1, REGISTER_ATTEMPTS + 1):
+            try:
+                return self._register()
+            except OperationalError:
+                if attempt == REGISTER_ATTEMPTS:
+                    logger.exception("Could not register worker %s", self.worker_id)
+                    return None
+                time.sleep(0.5 * attempt)
+            finally:
+                close_old_connections()
+        return None  # pragma: no cover
+
+    def _register(self) -> Worker:
         now = timezone.now()
         row, _ = Worker.objects.update_or_create(
             worker_id=self.worker_id,

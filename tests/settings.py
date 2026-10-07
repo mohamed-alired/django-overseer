@@ -46,8 +46,14 @@ DATABASES = {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": _sqlite_file or ":memory:",
         "TEST": {"NAME": f"{_sqlite_file}.test" if _sqlite_file else None},
-        # WAL lets the worker, scheduler and test process read and write concurrently.
-        "OPTIONS": {"timeout": 30, "init_command": "PRAGMA journal_mode=WAL;"}
+        # WAL lets the worker, scheduler and test process read and write concurrently, and
+        # IMMEDIATE transactions take the write lock up front so a writer waits (busy
+        # timeout) instead of failing with "database is locked" after its first read.
+        "OPTIONS": {
+            "timeout": 30,
+            "transaction_mode": "IMMEDIATE",
+            "init_command": "PRAGMA journal_mode=WAL;",
+        }
         if _sqlite_file
         else {},
     }

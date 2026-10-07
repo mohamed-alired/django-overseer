@@ -276,6 +276,11 @@ immediately. Recorders never raise: a bug in Overseer cannot break your worker.
   your `LOGIN_URL`.
 - Set `OVERSEER_RECORD_ARGS = False` if task arguments may contain secrets or personal
   data; tracebacks are still stored, capped at `OVERSEER_MAX_TRACEBACK_CHARS`.
+- On SQLite with several processes (workers, the scheduler, the web app) writing to one
+  file, configure the database as Django recommends for concurrent writers:
+  `"OPTIONS": {"transaction_mode": "IMMEDIATE", "timeout": 20, "init_command": "PRAGMA
+  journal_mode=WAL;"}`. Without it a writer that already read in the same transaction can
+  fail with "database is locked" instead of waiting.
 - `ENQUEUE_ON_COMMIT` is honoured: a task enqueued inside a transaction is recorded when the
   transaction commits, and never if it rolls back.
 
