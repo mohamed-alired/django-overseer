@@ -73,3 +73,9 @@ def slow(seconds):
 
     time.sleep(seconds)
     return seconds
+
+
+@overseer.task(retries=2, backoff="constant", backoff_base=0, jitter=False)
+def flaky_fast(fail_times, marker="flaky_fast"):
+    """Like ``flaky`` but retries immediately; for real-worker integration tests."""
+    return flaky.call(fail_times, marker=marker)

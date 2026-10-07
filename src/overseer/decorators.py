@@ -14,7 +14,7 @@ from django.tasks.base import (
     DEFAULT_TASK_QUEUE_NAME,
 )
 
-from . import registry
+from . import conf, registry
 from .registry import TaskPolicy
 from .scheduling import registry as schedule_registry
 
@@ -34,28 +34,67 @@ class OverseerTask(DjangoTask):
         payload = json.dumps([args, kwargs], sort_keys=True, default=str)
         return f"{self.module_path}:{hashlib.sha256(payload.encode()).hexdigest()[:32]}"
 
-    def enqueue(self, *args, **kwargs):
-        key = self._unique_key(args, kwargs)
-        if key:
-            from .models import Job, JobStatus
+    def _existing_result(self, key):
+        """The result of the active job holding ``key``, or None when there is none."""
+        from .models import Job, JobStatus
 
-            existing = (
-                Job.objects.filter(
-                    unique_key=key, status__in=[JobStatus.PENDING, JobStatus.RUNNING]
-                )
-                .order_by("-created_at")
-                .first()
-            )
-            if existing is not None:
-                run = existing.runs.order_by("-attempt").first()
-                if run is not None:
-                    return self.get_backend().get_result(run.result_id)
+        existing = (
+            Job.objects.filter(unique_key=key, status__in=[JobStatus.PENDING, JobStatus.RUNNING])
+            .order_by("-created_at")
+            .first()
+        )
+        if existing is None:
+            return None, None
+        run = existing.runs.order_by("-attempt").first()
+        if run is None:
+            return existing, None
+        return existing, self.get_backend().get_result(run.result_id)
+
+    def enqueue(self, *args, **kwargs):
         from . import recorders
 
-        with recorders.enqueue_context(unique_key=key):
+        key = self._unique_key(args, kwargs)
+        if not key:
             # Explicit base call: ``slots=True`` dataclasses recreate the class, which breaks
             # the zero-argument ``super()``.
             return DjangoTask.enqueue(self, *args, **kwargs)
+
+        from django.db import IntegrityError, transaction
+
+        from .models import Job, JobStatus
+
+        existing, result = self._existing_result(key)
+        if result is not None:
+            return result
+        policy = registry.get_policy(self.module_path)
+        record_args = conf.get_setting("OVERSEER_RECORD_ARGS")
+        with transaction.atomic():
+            try:
+                with transaction.atomic():
+                    job = Job.objects.create(
+                        task_path=self.module_path,
+                        task_name=self.name,
+                        backend=self.backend,
+                        queue_name=self.queue_name,
+                        priority=self.priority,
+                        args=recorders.json_safe(list(args)) if record_args else [],
+                        kwargs=recorders.json_safe(dict(kwargs)) if record_args else {},
+                        status=JobStatus.PENDING,
+                        max_retries=policy.retries,
+                        unique_key=key,
+                        tags=list(policy.tags),
+                    )
+            except IntegrityError:
+                # Lost the race: another process just reserved this key.
+                existing, result = self._existing_result(key)
+                if result is not None:
+                    return result
+                if existing is None:  # pragma: no cover - it finished in between; start over
+                    return self.enqueue(*args, **kwargs)
+                # Its enqueue is committed but not yet recorded; attach a run to its job.
+                job = existing
+            with recorders.enqueue_context(unique_key=key, job=job):
+                return DjangoTask.enqueue(self, *args, **kwargs)
 
 
 def task(

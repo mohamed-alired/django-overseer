@@ -15,3 +15,5 @@ DATABASES = {
         "TEST": {"NAME": os.environ.get("PGDATABASE", "overseer") + "_test"},
     }
 }
+if os.environ.get("OVERSEER_DB_NAME"):
+    DATABASES["default"]["NAME"] = os.environ["OVERSEER_DB_NAME"]

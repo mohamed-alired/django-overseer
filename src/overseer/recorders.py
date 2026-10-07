@@ -64,7 +64,7 @@ def _safe(fn):
     return handler
 
 
-def _json_safe(value):
+def json_safe(value):
     try:
         json.dumps(value)
         return value
@@ -95,8 +95,8 @@ def record_enqueued(task_result):
                 backend=task_result.backend,
                 queue_name=task.queue_name,
                 priority=task.priority,
-                args=_json_safe(list(task_result.args)) if record_args else [],
-                kwargs=_json_safe(dict(task_result.kwargs)) if record_args else {},
+                args=json_safe(list(task_result.args)) if record_args else [],
+                kwargs=json_safe(dict(task_result.kwargs)) if record_args else {},
                 status=JobStatus.PENDING,
                 source=ctx.source,
                 max_retries=policy.retries,
@@ -181,7 +181,7 @@ def record_finished(task_result):
     run.duration_ms = _ms(run.started_at, finished_at)
     if succeeded:
         try:
-            run.return_value = _json_safe(task_result.return_value)
+            run.return_value = json_safe(task_result.return_value)
         except Exception:  # pragma: no cover
             run.return_value = None
     elif task_result.errors:

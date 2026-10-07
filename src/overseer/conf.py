@@ -39,6 +39,8 @@ DEFAULTS = {
     # How often the scheduler loop rolls up metrics and evaluates alerts (seconds).
     "OVERSEER_MAINTENANCE_INTERVAL": 60.0,
     "OVERSEER_SCHEDULER_TIMEZONE": None,  # None = settings.TIME_ZONE
+    "OVERSEER_AUTODISCOVER": True,  # import <app>.tasks for every installed app
+    "OVERSEER_TASK_MODULES": [],  # extra dotted modules to import at startup
 }
 
 

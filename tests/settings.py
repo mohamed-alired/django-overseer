@@ -1,5 +1,7 @@
 """Settings for the django-overseer test suite."""
 
+import os
+
 SECRET_KEY = "not-a-secret"
 DEBUG = False
 
@@ -35,7 +37,20 @@ TEMPLATES = [
     }
 ]
 
-DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}}
+# ``OVERSEER_SQLITE_FILE`` switches to a file database so the integration tests can share
+# it with real worker and scheduler subprocesses; ``OVERSEER_DB_NAME`` is what those
+# subprocesses receive (the *test* database name of the parent pytest process).
+_sqlite_file = os.environ.get("OVERSEER_SQLITE_FILE")
+DATABASES = {
+    "default": {
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": _sqlite_file or ":memory:",
+        "TEST": {"NAME": f"{_sqlite_file}.test" if _sqlite_file else None},
+        "OPTIONS": {"timeout": 20} if _sqlite_file else {},
+    }
+}
+if os.environ.get("OVERSEER_DB_NAME"):
+    DATABASES["default"]["NAME"] = os.environ["OVERSEER_DB_NAME"]
 ROOT_URLCONF = "tests.urls"
 STATIC_URL = "/static/"
 USE_TZ = True
@@ -54,3 +69,5 @@ TASKS = {
     "immediate": {"BACKEND": "django.tasks.backends.immediate.ImmediateBackend"},
     "dummy": {"BACKEND": "django.tasks.backends.dummy.DummyBackend"},
 }
+
+OVERSEER_TASK_MODULES = ["tests.tasks"]

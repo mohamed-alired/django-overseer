@@ -13,16 +13,16 @@
 {% if rows %}
 <table>
   <tr><th>Task</th><th>Queue</th><th>Error</th><th class="num">Attempts</th><th>Failed</th>{% if can_manage_jobs %}<th></th>{% endif %}</tr>
-  {% for row in rows %}
+  {% for job in rows %}
   <tr>
-    <td><a href="{% url 'overseer:job' row.job.pk %}">{{ row.job.task_name }}</a><br><span class="muted mono">{{ row.job.pk|short_id }} · {{ row.job.args }} {{ row.job.kwargs }}</span></td>
-    <td>{{ row.job.queue_name }}</td>
-    <td class="mono">{{ row.run.exception_class|default:"–" }}</td>
-    <td class="num">{{ row.job.attempts }}</td>
-    <td>{{ row.job.finished_at|ago }}</td>
+    <td><a href="{% url 'overseer:job' job.pk %}">{{ job.task_name }}</a><br><span class="muted mono">{{ job.pk|short_id }} · {{ job.args }} {{ job.kwargs }}</span></td>
+    <td>{{ job.queue_name }}</td>
+    <td class="mono">{{ job.last_error|default:"–" }}</td>
+    <td class="num">{{ job.attempts }}</td>
+    <td>{{ job.finished_at|ago }}</td>
     {% if can_manage_jobs %}<td class="actions">
-      <form method="post" action="{% url 'overseer:job-retry' row.job.pk %}">{% csrf_token %}<button class="btn">Retry</button></form>
-      <form method="post" action="{% url 'overseer:job-dismiss' row.job.pk %}">{% csrf_token %}<button class="btn">Dismiss</button></form>
+      <form method="post" action="{% url 'overseer:job-retry' job.pk %}">{% csrf_token %}<button class="btn">Retry</button></form>
+      <form method="post" action="{% url 'overseer:job-dismiss' job.pk %}">{% csrf_token %}<button class="btn">Dismiss</button></form>
     </td>{% endif %}
   </tr>
   {% endfor %}

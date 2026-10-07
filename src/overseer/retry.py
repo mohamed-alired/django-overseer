@@ -6,6 +6,7 @@ import logging
 import random
 from datetime import timedelta
 
+from django.db import transaction
 from django.tasks import task_backends
 from django.utils import timezone
 from django.utils.module_loading import import_string
@@ -105,7 +106,10 @@ def handle_failure(job: Job, run: Run) -> Run | None:
 
 def retry_job(job: Job) -> Run:
     """Manual retry from the dashboard: a fresh attempt regardless of the policy."""
-    previous = job.runs.order_by("-attempt").first()
-    if previous is not None and previous.status in {RunStatus.READY, RunStatus.RUNNING}:
-        raise ValueError("Job already has an active run")
-    return enqueue_retry(job, previous, source=JobSource.MANUAL)
+    with transaction.atomic():
+        # Lock the job so two dashboards clicking "retry" at once enqueue a single attempt.
+        job = Job.objects.select_for_update().get(pk=job.pk)
+        previous = job.runs.order_by("-attempt").first()
+        if previous is not None and previous.status in {RunStatus.READY, RunStatus.RUNNING}:
+            raise ValueError("Job already has an active run")
+        return enqueue_retry(job, previous, source=JobSource.MANUAL)

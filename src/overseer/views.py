@@ -5,7 +5,6 @@ from __future__ import annotations
 from django.contrib import messages
 from django.contrib.auth.mixins import UserPassesTestMixin
 from django.core.paginator import Paginator
-from django.db.models import Max
 from django.http import HttpResponseNotAllowed
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
@@ -127,8 +126,8 @@ class JobsView(Page):
             page=page,
             filters=filters,
             statuses=JobStatus.choices,
-            queue_names=sorted(Job.objects.values_list("queue_name", flat=True).distinct()),
-            task_paths=sorted(Job.objects.values_list("task_path", flat=True).distinct()),
+            queue_names=stats.distinct_values("queue_name"),
+            task_paths=stats.distinct_values("task_path"),
         )
         return ctx
 
@@ -160,17 +159,9 @@ class FailedView(Page):
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        qs = (
-            Job.objects.filter(status=JobStatus.FAILED, dismissed=False)
-            .annotate(last_run_at=Max("runs__finished_at"))
-            .order_by("-last_run_at")
-        )
+        qs = stats.failed_jobs().select_related("schedule")
         page = Paginator(qs, self.per_page).get_page(self.request.GET.get("page"))
-        rows = []
-        for job in page.object_list:
-            last = job.runs.order_by("-attempt").first()
-            rows.append({"job": job, "run": last})
-        ctx.update(page=page, rows=rows, total=qs.count())
+        ctx.update(page=page, rows=page.object_list, total=page.paginator.count)
         return ctx
 
 
@@ -206,7 +197,7 @@ class MetricsView(Page):
         ctx.update(
             minutes=minutes,
             queue=queue,
-            queue_names=sorted(Job.objects.values_list("queue_name", flat=True).distinct()),
+            queue_names=stats.distinct_values("queue_name"),
             points=points,
             points_max=max((p["succeeded"] + p["failed"] for p in points), default=0),
             runtime_max=max((p["runtime_p95_ms"] for p in points), default=0),

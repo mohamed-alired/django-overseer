@@ -99,6 +99,16 @@ class Job(models.Model):
             models.Index(fields=["status", "created_at"]),
             models.Index(fields=["queue_name", "status"]),
         ]
+        constraints = [
+            # At most one active job per unique key, enforced by the database so two
+            # processes enqueueing the same unique task at once cannot both win.
+            models.UniqueConstraint(
+                fields=["unique_key"],
+                condition=~models.Q(unique_key="")
+                & models.Q(status__in=[JobStatus.PENDING, JobStatus.RUNNING]),
+                name="overseer_job_unique_active",
+            )
+        ]
         permissions = [
             ("view_dashboard", "Can view the Overseer dashboard"),
             ("manage_jobs", "Can retry, cancel and dismiss jobs"),

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from django.db.models import Avg, Count, F, Max, Q
+from django.db.models import Avg, Count, Max, OuterRef, Q, Subquery
 from django.utils import timezone
 
 from . import conf, metrics
@@ -18,6 +18,12 @@ BAD_RUN = (RunStatus.FAILED, RunStatus.ABANDONED)
 def window_bounds(minutes: int, now=None):
     now = now or timezone.now()
     return now - timedelta(minutes=minutes), now
+
+
+def distinct_values(field: str) -> list:
+    """Sorted distinct values of a Job column (without Meta.ordering, which would make
+    DISTINCT span ``created_at`` too and return one row per job)."""
+    return sorted(Job.objects.order_by().values_list(field, flat=True).distinct())
 
 
 def overview(minutes: int = 60, now=None) -> dict:
@@ -59,7 +65,7 @@ def overview(minutes: int = 60, now=None) -> dict:
 
 def queues(minutes: int = 60, now=None) -> list[dict]:
     since, now = window_bounds(minutes, now)
-    names = set(Job.objects.values_list("queue_name", flat=True).distinct())
+    names = set(distinct_values("queue_name"))
     names |= set(Schedule.objects.exclude(queue_name="").values_list("queue_name", flat=True))
     rows = {
         name: {
@@ -109,7 +115,7 @@ def queues(minutes: int = 60, now=None) -> list[dict]:
             wait_avg_ms=int(row["wait_avg"] or 0),
             runtime_avg_ms=int(row["runtime_avg"] or 0),
         )
-    backends = set(Job.objects.values_list("backend", flat=True).distinct()) or {"default"}
+    backends = set(distinct_values("backend")) or {"default"}
     for alias in backends:
         try:
             adapter = get_adapter(alias)
@@ -228,6 +234,13 @@ def run_chain(job: Job):
 
 
 def failed_jobs():
-    return job_queryset(status=JobStatus.FAILED, dismissed=False).annotate(
-        last_error=F("runs__exception_class")
+    """Open failed jobs, newest failure first, with the last attempt's error attached."""
+    last = Run.objects.filter(job=OuterRef("pk")).order_by("-attempt")
+    return (
+        Job.objects.filter(status=JobStatus.FAILED, dismissed=False)
+        .annotate(
+            last_error=Subquery(last.values("exception_class")[:1]),
+            last_run_at=Subquery(last.values("finished_at")[:1]),
+        )
+        .order_by("-last_run_at", "-created_at")
     )
