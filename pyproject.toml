@@ -1,0 +1,93 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "django-overseer"
+dynamic = ["version"]
+description = "Dashboard, retries and schedules for Django's built-in Tasks framework"
+readme = "README.md"
+authors = [{ name = "mohamed ali", email = "mohamed.ali@redwoodcompliance.com" }]
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Web Environment",
+    "Framework :: Django",
+    "Framework :: Django :: 6.0",
+    "Framework :: Django :: 6.1",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: System :: Monitoring",
+]
+keywords = ["django", "tasks", "background", "queue", "dashboard", "retries", "scheduler", "cron"]
+dependencies = ["django>=6.0"]
+
+[project.optional-dependencies]
+db = ["django-tasks-db>=0.13"]
+test = [
+    "django-tasks-db>=0.13",
+    "pytest>=8",
+    "pytest-django>=4.9",
+    "pytest-cov",
+    "freezegun>=1.5",
+    "requests>=2.31",
+]
+dev = ["django-overseer[test]", "ruff", "build", "twine"]
+
+[project.urls]
+Homepage = "https://github.com/mohamed-alired/django-overseer"
+Repository = "https://github.com/mohamed-alired/django-overseer.git"
+Issues = "https://github.com/mohamed-alired/django-overseer/issues"
+Changelog = "https://github.com/mohamed-alired/django-overseer/blob/main/CHANGELOG.md"
+
+[tool.hatch.version]
+path = "src/overseer/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/overseer"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/overseer", "tests", "docs", "README.md", "CHANGELOG.md", "LICENSE", "pyproject.toml"]
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "tests.settings"
+pythonpath = ["src", "."]
+testpaths = ["tests"]
+addopts = "-ra"
+filterwarnings = ["error::DeprecationWarning:overseer"]
+markers = [
+    "e2e: end-to-end over real HTTP (live_server)",
+    "perf: performance guards",
+    "postgres: needs PostgreSQL (skipped elsewhere)",
+    "worker: spawns a real db_worker subprocess",
+]
+
+[tool.coverage.run]
+source = ["overseer"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 90
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "DJ", "SIM", "T20"]
+ignore = ["DJ001"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/overseer/migrations/*" = ["E501", "I"]
+"src/overseer/management/commands/*" = ["T20"]
+
+[tool.ruff.format]
+exclude = ["src/overseer/migrations/*"]
