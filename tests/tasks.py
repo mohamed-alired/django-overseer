@@ -79,3 +79,45 @@ def slow(seconds):
 def flaky_fast(fail_times, marker="flaky_fast"):
     """Like ``flaky`` but retries immediately; for real-worker integration tests."""
     return flaky.call(fail_times, marker=marker)
+
+
+# --- 0.1.1 regression tasks -------------------------------------------------------------
+
+
+@overseer.task(unique=True, retries=2, backoff="constant", backoff_base=0, jitter=False)
+def unique_flaky(n):
+    """Unique and retrying: fails on its first call, then succeeds."""
+    CALLS.append(("unique_flaky", n))
+    if sum(1 for c in CALLS if c[0] == "unique_flaky") < 2:
+        raise RuntimeError("first attempt fails")
+    return n
+
+
+@overseer.task(retries=1, backoff="constant", backoff_base=0, jitter=False)
+def needs_arg(x):
+    CALLS.append(("needs_arg", x))
+    if sum(1 for c in CALLS if c[0] == "needs_arg") < 2:
+        raise RuntimeError("fail once")
+    return x
+
+
+@task
+def child(x):
+    CALLS.append(("child", x))
+    return x
+
+
+@overseer.task(retries=1, backoff="constant", backoff_base=0, jitter=False, backend="immediate")
+def parent_immediate(x):
+    """Runs inline (immediate backend), enqueues a child, fails on its first call."""
+    CALLS.append(("parent", x))
+    child.enqueue(x)
+    if sum(1 for c in CALLS if c[0] == "parent") < 2:
+        raise RuntimeError("parent fails once")
+    return x
+
+
+@overseer.task(unique=True, backend="immediate")
+def unique_parent_immediate(x):
+    child.enqueue(x)
+    return x

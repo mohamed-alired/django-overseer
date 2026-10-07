@@ -13,6 +13,7 @@ import socket
 from dataclasses import dataclass
 
 from django.db import transaction
+from django.db.models import F
 from django.tasks import TaskResultStatus
 from django.tasks.signals import task_enqueued, task_finished, task_started
 from django.utils import timezone
@@ -33,6 +34,10 @@ class EnqueueContext:
     source: str = JobSource.ENQUEUE
     schedule_id: int | None = None
     unique_key: str = ""
+    # Set once ``record_enqueued`` used this context. A context describes exactly one
+    # enqueue: tasks enqueued later in the same scope (for example by a task body that an
+    # immediate backend runs inline) must not be recorded as part of the same job.
+    consumed: bool = False
 
 
 _context: contextvars.ContextVar[EnqueueContext | None] = contextvars.ContextVar(
@@ -40,10 +45,16 @@ _context: contextvars.ContextVar[EnqueueContext | None] = contextvars.ContextVar
 )
 
 
+def current_context() -> EnqueueContext | None:
+    """The enqueue context that the next enqueue will use, if any."""
+    ctx = _context.get()
+    return ctx if ctx is not None and not ctx.consumed else None
+
+
 @contextlib.contextmanager
 def enqueue_context(**kwargs):
-    current = _context.get()
-    merged = EnqueueContext(**{**(vars(current) if current else {}), **kwargs})
+    current = current_context()
+    merged = EnqueueContext(**{**(vars(current) if current else {}), **kwargs, "consumed": False})
     token = _context.set(merged)
     try:
         yield merged
@@ -54,7 +65,10 @@ def enqueue_context(**kwargs):
 def _safe(fn):
     def handler(sender, task_result, **kwargs):
         try:
-            fn(task_result)
+            # A savepoint, so that a database error here cannot poison a transaction the
+            # caller has open (an immediate backend runs inside the caller's atomic block).
+            with transaction.atomic():
+                fn(task_result)
         except Exception:  # pragma: no cover - defensive; tested via a forced failure
             logger.exception(
                 "overseer recorder %s failed for result %s", fn.__name__, task_result.id
@@ -82,7 +96,10 @@ def record_enqueued(task_result):
     existing = Run.objects.filter(result_id=str(task_result.id)).first()
     if existing is not None:
         return existing
-    ctx = _context.get() or EnqueueContext()
+    ctx = current_context()
+    if ctx is None:
+        ctx = EnqueueContext()
+    ctx.consumed = True
     task = task_result.task
     policy = registry.get_policy(task.module_path)
     record_args = conf.get_setting("OVERSEER_RECORD_ARGS")
@@ -136,16 +153,16 @@ def _touch_worker(task_result, run, *, finished=False, failed=False):
         worker_id=worker_id,
         defaults={"hostname": socket.gethostname(), "backend": task_result.backend},
     )
-    worker.last_seen_at = now
-    worker.stopped_at = None
+    # A single UPDATE with F() expressions: counters stay exact even when several
+    # processes report for the same worker id.
+    changes = {"last_seen_at": now, "stopped_at": None}
     if finished:
-        worker.current_run = None
-        worker.tasks_processed += 1
+        changes.update(current_run=None, tasks_processed=F("tasks_processed") + 1)
         if failed:
-            worker.tasks_failed += 1
+            changes["tasks_failed"] = F("tasks_failed") + 1
     else:
-        worker.current_run = run
-    worker.save()
+        changes["current_run"] = run
+    Worker.objects.filter(pk=worker.pk).update(**changes)
 
 
 def record_started(task_result):

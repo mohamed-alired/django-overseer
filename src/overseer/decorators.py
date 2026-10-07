@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from dataclasses import dataclass
 
+from asgiref.sync import sync_to_async
 from django.tasks import Task as DjangoTask
 from django.tasks import task as django_task
 from django.tasks.base import (
@@ -17,6 +19,8 @@ from django.tasks.base import (
 from . import conf, registry
 from .registry import TaskPolicy
 from .scheduling import registry as schedule_registry
+
+logger = logging.getLogger("overseer")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -35,7 +39,13 @@ class OverseerTask(DjangoTask):
         return f"{self.module_path}:{hashlib.sha256(payload.encode()).hexdigest()[:32]}"
 
     def _existing_result(self, key):
-        """The result of the active job holding ``key``, or None when there is none."""
+        """The result of the active job holding ``key``, or None when there is none.
+
+        An active job without any recorded run can only be left behind by a failed
+        recorder; it would hold the key forever, so it is released (marked failed).
+        """
+        from django.utils import timezone
+
         from .models import Job, JobStatus
 
         existing = (
@@ -44,31 +54,36 @@ class OverseerTask(DjangoTask):
             .first()
         )
         if existing is None:
-            return None, None
+            return None
         run = existing.runs.order_by("-attempt").first()
         if run is None:
-            return existing, None
-        return existing, self.get_backend().get_result(run.result_id)
+            logger.warning("Releasing unique key %r held by job %s with no runs", key, existing.pk)
+            Job.objects.filter(pk=existing.pk).update(
+                status=JobStatus.FAILED, finished_at=timezone.now()
+            )
+            return None
+        return self.get_backend().get_result(run.result_id)
 
     def enqueue(self, *args, **kwargs):
-        from . import recorders
+        from django.db import IntegrityError, transaction
 
+        from . import recorders
+        from .models import Job, JobSource, JobStatus
+
+        ctx = recorders.current_context()
         key = self._unique_key(args, kwargs)
-        if not key:
+        if not key or (ctx is not None and ctx.job is not None):
+            # Not unique, or a new attempt of a job that already holds its key.
             # Explicit base call: ``slots=True`` dataclasses recreate the class, which breaks
             # the zero-argument ``super()``.
             return DjangoTask.enqueue(self, *args, **kwargs)
 
-        from django.db import IntegrityError, transaction
-
-        from .models import Job, JobStatus
-
-        existing, result = self._existing_result(key)
+        result = self._existing_result(key)
         if result is not None:
             return result
         policy = registry.get_policy(self.module_path)
         record_args = conf.get_setting("OVERSEER_RECORD_ARGS")
-        with transaction.atomic():
+        for _ in range(3):
             try:
                 with transaction.atomic():
                     job = Job.objects.create(
@@ -80,21 +95,32 @@ class OverseerTask(DjangoTask):
                         args=recorders.json_safe(list(args)) if record_args else [],
                         kwargs=recorders.json_safe(dict(kwargs)) if record_args else {},
                         status=JobStatus.PENDING,
+                        source=ctx.source if ctx is not None else JobSource.ENQUEUE,
+                        schedule_id=ctx.schedule_id if ctx is not None else None,
                         max_retries=policy.retries,
                         unique_key=key,
                         tags=list(policy.tags),
                     )
+                    with recorders.enqueue_context(unique_key=key, job=job) as job_ctx:
+                        result = DjangoTask.enqueue(self, *args, **kwargs)
+                        if not job.runs.filter(result_id=str(result.id)).exists():
+                            # The recorder failed; record here so the key is never held by
+                            # a job without runs. An error rolls the whole enqueue back.
+                            job_ctx.consumed = False
+                            recorders.record_enqueued(result)
+                    return result
             except IntegrityError:
-                # Lost the race: another process just reserved this key.
-                existing, result = self._existing_result(key)
+                # Lost the race: another process holds this key now.
+                result = self._existing_result(key)
                 if result is not None:
                     return result
-                if existing is None:  # pragma: no cover - it finished in between; start over
-                    return self.enqueue(*args, **kwargs)
-                # Its enqueue is committed but not yet recorded; attach a run to its job.
-                job = existing
-            with recorders.enqueue_context(unique_key=key, job=job):
-                return DjangoTask.enqueue(self, *args, **kwargs)
+        raise RuntimeError(f"Could not reserve unique key {key!r}")  # pragma: no cover
+
+    async def aenqueue(self, *args, **kwargs):
+        if not self._unique_key(args, kwargs):
+            return await DjangoTask.aenqueue(self, *args, **kwargs)
+        # The uniqueness check needs transactions and row locks, which are synchronous.
+        return await sync_to_async(self.enqueue)(*args, **kwargs)
 
 
 def task(
