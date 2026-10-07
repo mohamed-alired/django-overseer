@@ -65,3 +65,11 @@ def scheduled_every_5(x):
 @task
 def scheduled_interval():
     return "tick"
+
+
+@task
+def slow(seconds):
+    import time
+
+    time.sleep(seconds)
+    return seconds

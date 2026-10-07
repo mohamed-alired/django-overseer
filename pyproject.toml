@@ -60,7 +60,12 @@ DJANGO_SETTINGS_MODULE = "tests.settings"
 pythonpath = ["src", "."]
 testpaths = ["tests"]
 addopts = "-ra"
-filterwarnings = ["error::DeprecationWarning:overseer"]
+filterwarnings = [
+    "error::DeprecationWarning:overseer",
+    # Django never closes in-memory SQLite connections (closing would drop the
+    # database), so the heartbeat thread's connection is reported unclosed in tests.
+    "ignore:unclosed database:ResourceWarning",
+]
 markers = [
     "e2e: end-to-end over real HTTP (live_server)",
     "perf: performance guards",

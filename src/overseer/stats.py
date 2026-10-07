@@ -217,7 +217,10 @@ def job_queryset(
             | Q(runs__result_id__icontains=search)
             | Q(unique_key__icontains=search)
         ).distinct()
-    return qs.annotate(run_count=Count("runs", distinct=True), last_run_at=Max("runs__enqueued_at"))
+    # Meta.ordering is dropped from GROUP BY queries, so order explicitly.
+    return qs.annotate(
+        run_count=Count("runs", distinct=True), last_run_at=Max("runs__enqueued_at")
+    ).order_by("-created_at", "id")
 
 
 def run_chain(job: Job):
