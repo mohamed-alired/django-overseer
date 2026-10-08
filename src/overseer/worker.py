@@ -20,6 +20,17 @@ logger = logging.getLogger("overseer")
 REGISTER_ATTEMPTS = 5
 
 
+def record_stop(worker_id: str) -> None:
+    """Mark ``worker_id`` stopped unless it already recorded its stop."""
+    now = timezone.now()
+    try:
+        Worker.objects.filter(worker_id=worker_id, stopped_at__isnull=True).update(
+            stopped_at=now, last_seen_at=now, current_run=None
+        )
+    except Exception:  # noqa: BLE001 - the database may be the reason we are stopping
+        logger.warning("Could not record the stop of worker %s", worker_id)
+
+
 class HeartbeatWorker(DBWorker):
     """A ``db_worker`` that keeps a ``Worker`` row alive while it runs.
 

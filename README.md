@@ -94,6 +94,9 @@ Open `/overseer/` as a staff user with the `overseer.view_dashboard` permission 
 always have it). `overseer.manage_jobs` allows retry / cancel / dismiss and
 `overseer.manage_schedules` allows pausing and triggering schedules.
 
+To try it first, [`examples/demo`](examples/demo) is a small shop project with example
+tasks, schedules and an admin login.
+
 ## Declaring tasks
 
 `overseer.task` is `django.tasks.task` plus a policy. It accepts the same arguments

@@ -10,7 +10,7 @@ from django.utils.autoreload import DJANGO_AUTORELOAD_ENV, run_with_reloader
 from django_tasks_db.management.commands.db_worker import Command as DBWorkerCommand
 
 from overseer import logs
-from overseer.worker import HeartbeatWorker
+from overseer.worker import HeartbeatWorker, record_stop
 
 WORKER_ID_ENV = "OVERSEER_WORKER_ID"
 
@@ -79,7 +79,14 @@ class Command(DBWorkerCommand):
         if reload:
             if os.environ.get(DJANGO_AUTORELOAD_ENV) == "true":
                 worker.configure_signals()
-            run_with_reloader(worker.run)
+                run_with_reloader(worker.run)
+                return
+            try:
+                run_with_reloader(worker.run)
+            finally:
+                # The reloader's parent process, leaving (SIGTERM, Ctrl-C): it kills the
+                # worker process on its way out, often before that one records its stop.
+                record_stop(worker_id)
         else:
             worker.configure_signals()
             worker.run()

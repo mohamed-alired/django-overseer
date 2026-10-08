@@ -271,3 +271,29 @@ class TestAlertsAndMetrics:
         s = scheduler.Scheduler(interval=0.01)
         s._step(sync=False, rescue_due=False, maintenance_due=True)
         assert self.enqueued_total() == 2
+
+
+class TestReloaderStop:
+    def test_the_reloader_parent_records_the_stop_it_causes(self, monkeypatch):
+        from django.utils.autoreload import DJANGO_AUTORELOAD_ENV
+
+        from overseer.management.commands import overseer_worker
+
+        def killed_by_sigterm(main_func):
+            # The child registered, then the parent got SIGTERM and killed it.
+            Worker.objects.create(worker_id="reloading", heartbeat_seconds=10)
+            raise SystemExit(0)
+
+        monkeypatch.delenv(DJANGO_AUTORELOAD_ENV, raising=False)
+        monkeypatch.setattr(overseer_worker, "run_with_reloader", killed_by_sigterm)
+        with pytest.raises(SystemExit):
+            call_command("overseer_worker", reload=True, worker_id="reloading", verbosity=0)
+        assert Worker.objects.get(worker_id="reloading").stopped_at is not None
+
+    def test_a_recorded_stop_is_kept(self):
+        from overseer.worker import record_stop
+
+        stopped = timezone.now() - timedelta(minutes=5)
+        Worker.objects.create(worker_id="done", stopped_at=stopped)
+        record_stop("done")
+        assert Worker.objects.get(worker_id="done").stopped_at == stopped

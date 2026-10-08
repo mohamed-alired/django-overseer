@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+- `overseer_worker --reload` (the default when `DEBUG` is on) recorded no stop when it got
+  SIGTERM: Django's autoreloader kills the worker process on its way out. The reloader's
+  parent process now records it.
+- An example project, `examples/demo`, to try the dashboard locally.
+
 ## [0.1.3] - 2026-10-08
 
 Fixes from a review of 0.1.2. No new migration.
