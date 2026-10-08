@@ -1,4 +1,4 @@
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 
 from overseer.scheduling.sync import sync_schedules
 
@@ -19,4 +19,7 @@ class Command(BaseCommand):
         for key, names in report.items():
             if names:
                 self.stdout.write(f"{key}: {', '.join(names)}")
+        if report["errors"]:
+            # Non-zero exit, so a deploy step notices a declaration that cannot run.
+            raise CommandError(f"Schedules that could not be synced: {', '.join(report['errors'])}")
         self.stdout.write(self.style.SUCCESS("Schedules synced."))

@@ -93,6 +93,40 @@ NUMERIC_SETTINGS = (
 )
 
 
+@register(Tags.templates)
+def check_dashboard_setup(app_configs, **kwargs):
+    """The dashboard reports results with the messages framework and links back with
+    ``request``; without them actions still work but say nothing."""
+    from django.conf import settings
+
+    missing = []
+    if "django.contrib.messages" not in settings.INSTALLED_APPS:
+        missing.append("'django.contrib.messages' in INSTALLED_APPS")
+    if not any(
+        m.endswith("MessageMiddleware") for m in getattr(settings, "MIDDLEWARE", None) or ()
+    ):
+        missing.append("'django.contrib.messages.middleware.MessageMiddleware' in MIDDLEWARE")
+    processors = set()
+    for engine in getattr(settings, "TEMPLATES", None) or ():
+        if engine.get("BACKEND") == "django.template.backends.django.DjangoTemplates":
+            processors.update((engine.get("OPTIONS") or {}).get("context_processors") or ())
+    for name in (
+        "django.template.context_processors.request",
+        "django.contrib.messages.context_processors.messages",
+    ):
+        if name not in processors:
+            missing.append(f"'{name}' in the DjangoTemplates context_processors")
+    if not missing:
+        return []
+    return [
+        Warning(
+            "The Overseer dashboard needs " + ", ".join(missing) + ".",
+            hint="Without them the dashboard's actions work but show no confirmation.",
+            id="overseer.W004",
+        )
+    ]
+
+
 @register(Tags.database)
 def check_unique_enforcement(app_configs, databases=None, **kwargs):
     """``unique=True`` relies on a partial unique index; warn where the database has none."""

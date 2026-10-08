@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import logging
 
-from django.contrib import messages
+from django.contrib import messages as django_messages
 from django.contrib.auth.mixins import UserPassesTestMixin
 from django.core.paginator import Paginator
-from django.http import HttpResponseNotAllowed
-from django.shortcuts import get_object_or_404, redirect
+from django.http import HttpResponseNotAllowed, HttpResponseRedirect
+from django.shortcuts import get_object_or_404
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.http import url_has_allowed_host_and_scheme
+from django.utils.module_loading import import_string
 from django.views import View
 from django.views.generic import TemplateView
 
@@ -23,6 +24,23 @@ from .scheduling import scheduler as scheduling
 from .scheduling.sync import sync_schedules
 
 logger = logging.getLogger("overseer")
+
+
+class messages:  # noqa: N801 - stands in for ``django.contrib.messages``
+    """Flash messages that never turn a finished action into an error page.
+
+    Without the messages framework (app, middleware) ``django.contrib.messages`` raises
+    after the retry or cancel already happened; ``overseer.W004`` reports the setup.
+    """
+
+    @staticmethod
+    def success(request, message):
+        django_messages.success(request, message, fail_silently=True)
+
+    @staticmethod
+    def error(request, message):
+        django_messages.error(request, message, fail_silently=True)
+
 
 WINDOWS = (15, 60, 360, 1440)
 WINDOW_LABELS = ((15, "15 minutes"), (60, "hour"), (360, "6 hours"), (1440, "24 hours"))
@@ -263,13 +281,18 @@ class Action(AccessMixin, View):
     def back(self, default="overseer:overview"):
         """Redirect to the posted ``next`` URL when it is on this site, else to ``default``."""
         target = self.request.POST.get("next", "")
-        if not url_has_allowed_host_and_scheme(
-            target,
-            allowed_hosts={self.request.get_host()},
-            require_https=self.request.is_secure(),
+        # Only a path on this site: a bare word ("failed") would otherwise go to ``redirect``,
+        # which takes it for a view name and fails to reverse it.
+        if not (
+            target.startswith("/")
+            and url_has_allowed_host_and_scheme(
+                target,
+                allowed_hosts={self.request.get_host()},
+                require_https=self.request.is_secure(),
+            )
         ):
             target = reverse(default)
-        return redirect(target)
+        return HttpResponseRedirect(target)
 
 
 class JobRetryView(Action):
@@ -325,20 +348,50 @@ class JobDismissView(Action):
         return self.back("overseer:failed")
 
 
+RETRY_ALL_SCAN_FACTOR = 5
+
+
+def retry_all_limit() -> int:
+    """``OVERSEER_RETRY_ALL_LIMIT`` as a positive integer (the default when it is not one)."""
+    value = conf.get_setting("OVERSEER_RETRY_ALL_LIMIT")
+    if isinstance(value, bool) or not isinstance(value, int | float) or value < 1:
+        return conf.DEFAULTS["OVERSEER_RETRY_ALL_LIMIT"]
+    return int(value)
+
+
+def _importable(path: str) -> bool:
+    try:
+        import_string(path)
+    except Exception:  # noqa: BLE001 - gone, renamed, or broken at import time
+        return False
+    return True
+
+
 class FailedRetryAllView(Action):
     def post(self, request):
         """Retry open failed jobs, oldest first, up to ``OVERSEER_RETRY_ALL_LIMIT`` per click.
 
         One job that cannot be retried never stops the others; it is counted and skipped.
         """
-        limit = conf.get_setting("OVERSEER_RETRY_ALL_LIMIT")
+        limit = retry_all_limit()
         failed = Job.objects.filter(status=JobStatus.FAILED, dismissed=False)
         total = failed.count()
-        retried = skipped = 0
+        # A task that no longer imports fails every one of its jobs the same way: find those
+        # paths once and count their jobs without walking them, so a large backlog of them
+        # never makes each click slower.
+        gone = [
+            path
+            for path in failed.order_by().values_list("task_path", flat=True).distinct()
+            if not _importable(path)
+        ]
+        skipped = failed.filter(task_path__in=gone).count() if gone else 0
+        retried = 0
         # Jobs that cannot be retried do not use up the budget, so a batch of unretryable
-        # jobs at the head of the list never hides the ones behind it.
-        for job in failed.order_by("created_at").iterator(chunk_size=200):
-            if retried >= limit:
+        # jobs at the head of the list never hides the ones behind it; the walk itself is
+        # still bounded.
+        candidates = failed.exclude(task_path__in=gone).order_by("created_at")
+        for examined, job in enumerate(candidates.iterator(chunk_size=200)):
+            if retried >= limit or examined >= limit * RETRY_ALL_SCAN_FACTOR:
                 break
             try:
                 retry.retry_job(job)

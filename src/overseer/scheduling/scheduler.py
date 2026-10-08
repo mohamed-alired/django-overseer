@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import signal
 import time
-from datetime import timedelta
+from datetime import UTC, timedelta
 
 from django.db import close_old_connections
 from django.db.models import F
@@ -28,15 +28,35 @@ def compute_next_run(schedule: Schedule, after=None):
     """
     after = after or timezone.now()
     check_schedule(schedule)
-    # Projects with USE_TZ = False work in naive local time; cron needs aware datetimes.
-    naive = timezone.is_naive(after)
-    if naive:
-        after = timezone.make_aware(after)
+    if timezone.is_aware(after):
+        return _next_instant(schedule, after)
+    # Projects with USE_TZ = False store naive local wall-clock times. The real instant
+    # behind a naive time in the repeated autumn hour is ambiguous, and a second-pass
+    # instant turns back into a wall time that is not after ``after``; such a next run
+    # would be due again on every tick. Step on until the stored wall time moves forward.
+    wall_after = after
+    result = _next_instant(schedule, timezone.make_aware(after))
+    for _ in range(MAX_NAIVE_STEPS):
+        wall = timezone.make_naive(result)
+        if wall > wall_after:
+            return wall
+        result = _next_instant(schedule, result)
+    raise ValueError(  # pragma: no cover - needs a step far below a minute
+        f"Schedule {schedule.name!r} cannot be represented in naive local time"
+    )
+
+
+# Enough for an every-minute cron through the longest repeated hour, or a short interval.
+MAX_NAIVE_STEPS = 24 * 60
+
+
+def _next_instant(schedule: Schedule, after):
+    """The next aware fire time after the aware ``after``. Intervals are real elapsed
+    time, added in UTC, so a daylight-saving change does not stretch or shrink them."""
     if schedule.cron:
-        result = parse(schedule.cron).next_after(after, tz=schedule_timezone(schedule))
-    else:
-        result = after + timedelta(seconds=schedule.interval_seconds)
-    return timezone.make_naive(result) if naive else result
+        return parse(schedule.cron).next_after(after, tz=schedule_timezone(schedule))
+    step = timedelta(seconds=schedule.interval_seconds)
+    return (after.astimezone(UTC) + step).astimezone(after.tzinfo)
 
 
 def disable_broken(schedule: Schedule, exc: Exception) -> None:
@@ -144,6 +164,8 @@ class Scheduler:
     def __init__(self, interval: float | None = None):
         self.interval = interval or conf.get_setting("OVERSEER_SCHEDULER_INTERVAL")
         self.running = False
+        self.sync_report: dict[str, list[str]] = {}
+        self._last_deep: float | None = None
 
     def _stop(self, signum, frame):
         logger.info("Scheduler received signal %s, stopping", signum)
@@ -157,7 +179,7 @@ class Scheduler:
         from .sync import sync_schedules
 
         if sync:
-            sync_schedules()
+            self.sync_report = sync_schedules()
         jobs = tick()
         if jobs:
             logger.info("Scheduler enqueued %d job(s)", len(jobs))
@@ -166,7 +188,13 @@ class Scheduler:
             if abandoned:
                 logger.warning("Scheduler abandoned %d stale run(s)", len(abandoned))
         if maintenance_due:
-            rollup()
+            if self._last_deep is None or time.monotonic() - self._last_deep >= 3600:
+                from ..metrics import DEEP_RECOMPUTE
+
+                rollup(since=timezone.now() - DEEP_RECOMPUTE)
+                self._last_deep = time.monotonic()
+            else:
+                rollup()
             evaluate_alerts()
         return jobs
 

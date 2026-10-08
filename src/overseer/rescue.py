@@ -10,7 +10,7 @@ from django.utils import timezone
 
 from . import conf, registry, retry
 from .adapters.base import get_adapter
-from .db import atomic_for
+from .db import alias_for, atomic_for
 from .exceptions import AdapterUnsupported
 from .models import Job, JobStatus, Run, RunStatus
 
@@ -103,11 +103,17 @@ def reconcile_waiting(now=None) -> dict[str, int]:
 
     now = now or timezone.now()
     report = {"lost": 0, "recorded": 0}
+    # When the backend's rows live in the same database as Overseer's, a run and its
+    # backend row commit together and a short grace is enough. Otherwise (another database,
+    # or storage Overseer cannot see) the backend row may commit much later than the run,
+    # so wait as long as a running attempt may take before calling a waiting one lost.
+    long_grace = timedelta(seconds=conf.get_setting("OVERSEER_STALE_AFTER"))
     waiting = list(
         Run.objects.select_related("job")
         .filter(status=RunStatus.READY, enqueued_at__lt=now - RECONCILE_GRACE)
         .order_by("enqueued_at")[:RECONCILE_BATCH]
     )
+    overseer_alias = alias_for(Run)
     by_backend: dict[str, list[Run]] = {}
     for run in waiting:
         by_backend.setdefault(run.backend, []).append(run)
@@ -116,7 +122,10 @@ def reconcile_waiting(now=None) -> dict[str, int]:
             backend = task_backends[alias]
             if not backend.supports_get_result:
                 continue
-            statuses = get_adapter(alias).result_statuses([r.result_id for r in runs])
+            adapter = get_adapter(alias)
+            if adapter.storage_alias() != overseer_alias:
+                runs = [r for r in runs if r.enqueued_at < now - long_grace]
+            statuses = adapter.result_statuses([r.result_id for r in runs]) if runs else {}
         except Exception:  # noqa: BLE001 - alias removed from TASKS, backend down
             logger.exception("Could not look up waiting runs on backend %r", alias)
             continue
@@ -156,7 +165,7 @@ def mark_lost(run: Run, now=None) -> Run:
         )
         run.save()
         Job.objects.filter(pk=run.job_id).update(
-            status=JobStatus.CANCELLED, finished_at=now, next_retry_at=None
+            status=JobStatus.CANCELLED, finished_at=now, next_retry_at=None, attempts=run.attempt
         )
     logger.warning("Run %s (%s) lost: backend has no such task", run.result_id, run.job.task_path)
     return run

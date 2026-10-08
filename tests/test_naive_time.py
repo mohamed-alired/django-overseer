@@ -75,3 +75,44 @@ def test_rollup_alerts_and_since(worker):
     assert alerts.evaluate() == []
     call_command("overseer_rollup", "--since", "2026-01-01T00:00:00+00:00", verbosity=0)
     call_command("overseer_rollup", "--since", "2026-01-01", verbosity=0)
+
+
+# Europe/Paris, 2026-10-25: at 03:00 CEST the clocks go back to 02:00 CET, so the naive
+# times 02:00-02:59 happen twice. Naive storage cannot tell the two passes apart.
+
+
+def test_next_cron_run_during_the_repeated_hour_is_after_the_current_time():
+    s = Schedule(name="c", task_path="tests.tasks.plain", cron="*/5 * * * *")
+    after = datetime(2026, 10, 25, 2, 56)
+    assert scheduler.compute_next_run(s, after) > after
+
+
+def test_a_cron_schedule_fires_once_per_slot_in_the_repeated_hour():
+    for name, cron, start in (
+        ("every5", "*/5 * * * *", datetime(2026, 10, 25, 2, 55)),
+        ("hourly", "0 * * * *", datetime(2026, 10, 25, 2, 0)),
+    ):
+        Schedule.objects.create(
+            name=name, task_path="tests.tasks.plain", args=[1], cron=cron, next_run_at=start
+        )
+        fired, now = 0, start
+        while now < datetime(2026, 10, 25, 3, 0):
+            fired += len(scheduler.tick(now))
+            now += timedelta(seconds=10)
+        assert fired == 1, name
+        Schedule.objects.all().delete()
+
+
+def test_interval_across_the_repeated_hour_never_lands_on_the_current_time():
+    s = Schedule(name="i", task_path="tests.tasks.plain", interval_seconds=3600)
+    after = datetime(2026, 10, 25, 2, 30)
+    assert scheduler.compute_next_run(s, after) == datetime(2026, 10, 25, 3, 30)
+    # Away from the change an interval is plain wall-clock arithmetic.
+    assert scheduler.compute_next_run(s, datetime(2026, 7, 1, 2, 30)) == datetime(2026, 7, 1, 3, 30)
+
+
+def test_schedule_with_its_own_timezone():
+    s = Schedule(
+        name="ny", task_path="tests.tasks.plain", cron="0 9 * * *", timezone="America/New_York"
+    )
+    assert scheduler.compute_next_run(s, datetime(2026, 7, 1, 12, 0)) == datetime(2026, 7, 1, 15, 0)

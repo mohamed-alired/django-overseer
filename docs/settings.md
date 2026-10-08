@@ -35,7 +35,7 @@ Delay before attempt *n* (n ≥ 2):
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `OVERSEER_RETENTION_DAYS` | `14` | `overseer_prune` deletes finished jobs (with their runs), resolved alerts and silent workers older than this (the setting must be at least 1; `overseer_prune --days 0` deletes everything finished) |
+| `OVERSEER_RETENTION_DAYS` | `14` | `overseer_prune` deletes finished jobs (with their runs) and resolved alerts older than this, and every worker not seen for this long (plain `db_worker` rows already after a day of silence) (the setting must be at least 1; `overseer_prune --days 0` deletes everything finished) |
 | `OVERSEER_METRICS_RETENTION_DAYS` | `30` | metric buckets older than this are deleted |
 | `OVERSEER_RECORD_ARGS` | `True` | store task args and kwargs on the `Job` |
 | `OVERSEER_MAX_TRACEBACK_CHARS` | `20000` | tracebacks are truncated to this length |
@@ -92,6 +92,10 @@ scheduler and the web process each need to import them.
   shorter than 16 characters.
 - `overseer.W002`: the database has no partial unique indexes (MySQL, MariaDB, Oracle), so
   `unique=True` cannot be guaranteed there.
+- `overseer.W004`: the dashboard's setup is incomplete: it needs `django.contrib.messages`
+  (app, `MessageMiddleware` and its context processor) to confirm actions, and the
+  `django.template.context_processors.request` context processor to return to the page an
+  action came from.
 - `overseer.W001`: a task with delayed retries (`backoff_base` above 0) uses a backend
   whose `supports_defer` is false, so backoff delays cannot be honoured and retries run
   immediately.

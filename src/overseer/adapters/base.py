@@ -41,6 +41,11 @@ class BaseAdapter:
         """``queue_depth`` for several queues; adapters override it with one query."""
         return {name: self.queue_depth(name) for name in queue_names}
 
+    def storage_alias(self) -> str | None:
+        """The database alias holding the backend's results, when it is a Django database
+        (lets reconciliation tell whether rows commit together with Overseer's)."""
+        return None
+
     def result_statuses(self, result_ids: list[str]) -> dict[str, str | None]:
         """The backend's status (a ``TaskResultStatus`` value) for each result id; None when
         the backend no longer has it. Adapters override it with one query."""

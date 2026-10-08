@@ -42,7 +42,7 @@ class OverseerTask(DjangoTask):
         payload = json.dumps([args, kwargs], sort_keys=True, default=str)
         return f"{self.module_path}:{hashlib.sha256(payload.encode()).hexdigest()[:32]}"
 
-    def _existing_result(self, key):
+    def _existing_result(self, key, _depth=0):
         """The result of the active job holding ``key``, or None when there is none.
 
         An active job without any recorded run can only be left behind by a failed
@@ -75,24 +75,34 @@ class OverseerTask(DjangoTask):
             )
             return NOT_ENFORCED
         try:
-            return backend.get_result(run.result_id)
+            result = backend.get_result(run.result_id)
         except TaskResultDoesNotExist:
-            # The backend lost the task behind the active run: it will never execute (or
-            # finish). A waiting run is lost; a running one is abandoned, which may enqueue
-            # the next attempt under the same key, whose result is then handed back.
-            from .rescue import abandon, mark_lost
+            result = None
+        if result is not None:
+            if not result.is_finished:
+                return result
+            # It finished but the signal was lost: record that, then look again (a failure
+            # may have enqueued a retry that now holds the key).
+            from . import recorders
 
-            if run.status == RunStatus.RUNNING:
-                abandon(run)
-                latest = existing.runs.order_by("-attempt").first()
-                if latest is not None and latest.pk != run.pk:
-                    try:
-                        return backend.get_result(latest.result_id)
-                    except TaskResultDoesNotExist:  # pragma: no cover
-                        return None
-            else:
-                mark_lost(run)
-            return None
+            recorders.record_finished(result, local=False)
+            return self._existing_result(key, _depth=_depth + 1) if _depth < 1 else None
+        # The backend lost the task behind the active run: it will never execute (or
+        # finish). A waiting run is lost; a running one is abandoned, which may enqueue the
+        # next attempt under the same key, whose result is then handed back.
+        from .rescue import abandon, mark_lost
+
+        if run.status == RunStatus.RUNNING:
+            abandon(run)
+            latest = existing.runs.order_by("-attempt").first()
+            if latest is not None and latest.pk != run.pk:
+                try:
+                    return backend.get_result(latest.result_id)
+                except TaskResultDoesNotExist:  # pragma: no cover
+                    return None
+        else:
+            mark_lost(run)
+        return None
 
     def enqueue(self, *args, **kwargs):
         from django.db import IntegrityError

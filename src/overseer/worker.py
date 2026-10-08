@@ -34,6 +34,7 @@ class HeartbeatWorker(DBWorker):
         self._stop_heartbeat = threading.Event()
         self._thread: threading.Thread | None = None
         self._stopped = False
+        self._atexit_registered = False
 
     def register(self) -> Worker | None:
         """Create or revive this worker's row. A transient database error (a locked SQLite
@@ -69,12 +70,13 @@ class HeartbeatWorker(DBWorker):
         return row
 
     def beat(self) -> None:
-        updated = Worker.objects.filter(worker_id=self.worker_id).update(
-            last_seen_at=timezone.now(), stopped_at=None
-        )
+        updated = Worker.objects.filter(
+            worker_id=self.worker_id, heartbeat_seconds__isnull=False
+        ).update(last_seen_at=timezone.now(), stopped_at=None)
         if not updated:
-            # Registration failed at startup, or the row was pruned: (re)create it so the
-            # worker is reported with its heartbeat, host and pid.
+            # Registration failed at startup, the row was pruned, or the recorder created
+            # it without heartbeat details: (re)register so the worker is reported with
+            # its heartbeat, host and pid.
             self._register()
 
     def _heartbeat_loop(self) -> None:
@@ -113,6 +115,9 @@ class HeartbeatWorker(DBWorker):
         logger.info("Worker %s stopped after %d task(s)", self.worker_id, self._run_tasks)
 
     def run(self) -> None:
+        # A fresh start each time, so a supervisor can call run() on the same instance again.
+        self._stopped = False
+        self._stop_heartbeat = threading.Event()
         self.register()
         self._thread = threading.Thread(
             target=self._heartbeat_loop, name=f"overseer-heartbeat-{self.worker_id}", daemon=True
@@ -120,7 +125,9 @@ class HeartbeatWorker(DBWorker):
         self._thread.start()
         # Under ``--reload`` Django runs this in a daemon thread and the autoreloader exits
         # the process with ``sys.exit``; ``finally`` never runs there, ``atexit`` does.
-        atexit.register(self._mark_stopped)
+        if not self._atexit_registered:
+            atexit.register(self._mark_stopped)
+            self._atexit_registered = True
         try:
             super().run()
         finally:

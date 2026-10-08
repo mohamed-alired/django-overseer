@@ -18,7 +18,11 @@ logger = logging.getLogger("overseer")
 
 BUCKET = timedelta(minutes=1)
 #: Buckets this far back are recomputed on every rollup, to absorb late finishes.
-RECOMPUTE = timedelta(minutes=3)
+# Each rollup recomputes this far back, so events that become visible late (a long
+# transaction, a slow worker commit) are still counted. The scheduler also recomputes
+# the last DEEP_RECOMPUTE once an hour.
+RECOMPUTE = timedelta(minutes=15)
+DEEP_RECOMPUTE = timedelta(hours=2)
 ALL_TASKS = ""
 
 

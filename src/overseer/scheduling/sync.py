@@ -89,7 +89,8 @@ def sync_schedules(now=None, *, enable_all: bool = False) -> dict[str, list[str]
                     row.next_run_at = compute_next_run(row, now)
                 row.last_error = ""
                 row.save()
-                report["enabled" if revived else "updated" if changed else "unchanged"].append(name)
+                # Anything written counts as updated, a recomputed next run included.
+                report["enabled" if revived else "updated"].append(name)
             except ValueError as exc:
                 logger.error("Schedule %r cannot be synced: %s", name, exc)
                 report["errors"].append(name)

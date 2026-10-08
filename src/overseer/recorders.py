@@ -12,6 +12,7 @@ import logging
 import socket
 from dataclasses import dataclass
 
+from django.db import IntegrityError
 from django.db.models import F
 from django.tasks import TaskResultStatus
 from django.tasks.signals import task_enqueued, task_finished, task_started
@@ -24,6 +25,7 @@ from .models import Job, JobSource, JobStatus, Run, RunStatus, Worker
 logger = logging.getLogger("overseer")
 
 INTERRUPTIONS = {"builtins.SystemExit", "builtins.KeyboardInterrupt"}
+LOST = "overseer.exceptions.RunLost"
 
 
 @dataclass
@@ -161,7 +163,9 @@ def _touch_worker(task_result, run, *, finished=False, failed=False, local=True)
     )
     # A single UPDATE with F() expressions: counters stay exact even when several
     # processes report for the same worker id.
-    changes = {"last_seen_at": now, "stopped_at": None}
+    # Only the worker process itself proves the worker is alive. Reconciliation by the
+    # scheduler records old work, so it must not revive a worker that has since stopped.
+    changes = {"last_seen_at": now, "stopped_at": None} if local else {}
     if finished:
         changes.update(current_run=None, tasks_processed=F("tasks_processed") + 1)
         if failed:
@@ -171,9 +175,30 @@ def _touch_worker(task_result, run, *, finished=False, failed=False, local=True)
     Worker.objects.filter(pk=worker.pk).update(**changes)
 
 
+def _reopen_if_lost(run):
+    """A run marked lost whose task turns out to exist after all (the backend's row became
+    visible late, e.g. on another database) is reopened so its real outcome is recorded."""
+    if run.status != RunStatus.CANCELLED or run.exception_class != LOST:
+        return run
+    logger.warning("Run %s was marked lost but its task ran; recording it", run.result_id)
+    run.status = RunStatus.READY
+    run.finished_at = None
+    run.exception_class = ""
+    run.traceback = ""
+    run.save(update_fields=["status", "finished_at", "exception_class", "traceback"])
+    try:
+        with atomic_for(Job):
+            Job.objects.filter(pk=run.job_id).update(status=JobStatus.PENDING, finished_at=None)
+    except IntegrityError:
+        # Another active job took the unique key meanwhile; the outcome is still recorded.
+        return run
+    run.job.status = JobStatus.PENDING
+    return run
+
+
 def record_started(task_result, *, local=True):
     """``local`` is False when called by the scheduler's reconciliation, not the worker."""
-    run = _get_run(task_result)
+    run = _reopen_if_lost(_get_run(task_result))
     if run.is_finished:
         return run
     now = timezone.now()
@@ -191,7 +216,7 @@ def record_started(task_result, *, local=True):
 
 def record_finished(task_result, *, local=True):
     """``local`` is False when called by the scheduler's reconciliation, not the worker."""
-    run = _get_run(task_result)
+    run = _reopen_if_lost(_get_run(task_result))
     if run.is_finished:
         return run
     now = timezone.now()
@@ -230,7 +255,9 @@ def record_finished(task_result, *, local=True):
         from . import retry
 
         retry.handle_failure(job, run)
-    _touch_worker(task_result, run, finished=True, failed=not succeeded, local=local)
+    # An interrupted attempt (forced worker stop) is not the task failing.
+    failed = not succeeded and run.status != RunStatus.ABANDONED
+    _touch_worker(task_result, run, finished=True, failed=failed, local=local)
     return run
 
 

@@ -25,4 +25,7 @@ class Command(BaseCommand):
         scheduler = Scheduler(interval=options["interval"])
         ticks = scheduler.run(once=options["once"])
         if options["once"]:
+            errors = scheduler.sync_report.get("errors", [])
+            if errors:
+                raise CommandError(f"Schedules that could not be synced: {', '.join(errors)}")
             self.stdout.write(self.style.SUCCESS(f"Scheduler ran {ticks} tick(s)."))

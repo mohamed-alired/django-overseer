@@ -85,6 +85,11 @@ python manage.py overseer_worker --queue-name='*'   # a worker with heartbeats
 python manage.py overseer_scheduler                 # schedules, rescue, metrics, alerts
 ```
 
+The dashboard uses the parts of Django that `startproject` enables by default: sessions,
+authentication, `django.contrib.messages` (app, `MessageMiddleware` and the `messages`
+context processor) and the `django.template.context_processors.request` context processor.
+The system check `overseer.W004` names whichever is missing.
+
 Open `/overseer/` as a staff user with the `overseer.view_dashboard` permission (superusers
 always have it). `overseer.manage_jobs` allows retry / cancel / dismiss and
 `overseer.manage_schedules` allows pausing and triggering schedules.
@@ -194,7 +199,7 @@ once.
 | `overseer_rescue` | one-off pass over running attempts that exceeded their timeout |
 | `overseer_rollup [--since ISO]` | recompute per-minute metric buckets |
 | `overseer_alerts` | one-off alert evaluation and notification |
-| `overseer_prune [--days N] [--metrics-days N]` | delete finished jobs, runs, resolved alerts, metric buckets and silent workers older than the retention (`--days 0` means everything finished) |
+| `overseer_prune [--days N] [--metrics-days N]` | delete finished jobs, runs, resolved alerts, metric buckets and workers not seen within the retention (`--days 0` means everything finished) |
 
 If you run `db_worker` directly instead of `overseer_worker`, tasks, retries, schedules and
 the dashboard all work: the worker shows up from the task signals. What you lose is

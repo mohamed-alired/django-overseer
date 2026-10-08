@@ -16,8 +16,12 @@ class Command(BaseCommand):
         since = None
         if options["since"]:
             raw = options["since"]
-            since = parse_datetime(raw)
-            if since is None and (day := parse_date(raw)) is not None:
+            try:
+                since = parse_datetime(raw)
+                day = parse_date(raw) if since is None else None
+            except ValueError as exc:  # well-formed but impossible, such as month 13
+                raise CommandError(f"--since: {raw!r} is not a valid date: {exc}") from None
+            if since is None and day is not None:
                 since = timezone.datetime.combine(day, timezone.datetime.min.time())
             if since is None:
                 raise CommandError(f"--since: {raw!r} is not an ISO date or datetime")

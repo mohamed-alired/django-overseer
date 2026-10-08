@@ -1,5 +1,50 @@
 # Changelog
 
+## [0.1.3] - 2026-10-08
+
+Fixes from a review of 0.1.2. No new migration.
+
+### Scheduling
+- With `USE_TZ = False`, a cron schedule fired on every scheduler tick during the hour that
+  repeats when daylight saving time ends, because its next run came out earlier than the
+  current time. Next runs are now always later than the current time.
+- Interval schedules add real (UTC) time across daylight-saving changes.
+- `overseer_sync_schedules`, and `overseer_scheduler --once`, exit with an error when a
+  schedule cannot be synced, so deploy scripts notice. A row that sync repaired is reported
+  as updated.
+- The scheduler recomputes the last two hours of metrics once an hour, and every rollup
+  goes back 15 minutes, so runs committed late (long transactions) are counted.
+
+### Runs and workers
+- A run marked lost whose task then ran after all (its backend row became visible late, on
+  another database for instance) is reopened and its real outcome recorded. When the
+  backend's rows live in another database than Overseer's, waiting runs are only called
+  lost after `OVERSEER_STALE_AFTER`.
+- A lost retry keeps the job's attempt count.
+- `unique=True` no longer hands back a result that finished while its signal was lost: the
+  outcome is recorded and a new task is enqueued.
+- Recording a result late (the rescue pass) no longer marks a stopped worker as running
+  again, which raised a false "worker offline" alert.
+- An attempt interrupted by a forced stop no longer counts as a failure of the worker.
+- `HeartbeatWorker.run()` can be called more than once: each run heartbeats and records
+  its stop. A worker row created by a task before the worker registered gets its
+  heartbeat settings on the next beat.
+
+### Dashboard
+- A `next` value that is not a path on the site (a bare word) gave a server error; it now
+  falls back to the default page.
+- "Retry all" no longer walks every job of a task that no longer exists on each click, and
+  a missing or invalid `OVERSEER_RETRY_ALL_LIMIT` falls back to 200 instead of failing.
+- Actions no longer fail after the fact when the messages framework is not installed; the
+  new system check `overseer.W004` names any missing part of the dashboard's setup
+  (messages app, middleware and context processor, `request` context processor).
+- Pages with several auto-refreshing regions (the job page) fetch the page once per
+  refresh instead of once per region.
+- Alert messages for an `OVERSEER_ALERT_WINDOW_MINUTES` over a day showed the wrong number
+  of minutes.
+- `overseer_rollup --since` with an impossible date (month 13, 30 February) reports it
+  instead of failing with a traceback.
+
 ## [0.1.2] - 2026-10-08
 
 Fixes from a review of 0.1.1, two of them regressions introduced there. No new migration.

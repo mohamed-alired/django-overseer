@@ -56,7 +56,7 @@ def detect(now=None) -> list[Condition]:
                         "failure_rate",
                         row["job__queue_name"],
                         f"{rate:.0%} of runs on queue {row['job__queue_name']!r} failed in the "
-                        f"last {window.seconds // 60} min",
+                        f"last {int(window.total_seconds() // 60)} min",
                         rate,
                         rate_threshold,
                     )

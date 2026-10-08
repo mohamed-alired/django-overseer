@@ -46,6 +46,11 @@ class DatabaseAdapter(BaseAdapter):
             qs = qs.filter(queue_name=queue_name)
         return qs.count()
 
+    def storage_alias(self):
+        from ..db import alias_for
+
+        return alias_for(self._model())
+
     def result_statuses(self, result_ids):
         DBTaskResult = self._model()
         rows = DBTaskResult.objects.filter(id__in=result_ids).values_list("id", "status")
