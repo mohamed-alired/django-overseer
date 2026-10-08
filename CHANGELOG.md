@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.1.4] - 2026-10-08
 
 - `overseer_worker --reload` (the default when `DEBUG` is on) recorded no stop when it got
   SIGTERM: Django's autoreloader kills the worker process on its way out. The reloader's
