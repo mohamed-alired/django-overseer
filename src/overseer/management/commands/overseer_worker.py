@@ -9,7 +9,20 @@ from django.core.management.base import CommandError
 from django.utils.autoreload import DJANGO_AUTORELOAD_ENV, run_with_reloader
 from django_tasks_db.management.commands.db_worker import Command as DBWorkerCommand
 
+from overseer import logs
 from overseer.worker import HeartbeatWorker
+
+WORKER_ID_ENV = "OVERSEER_WORKER_ID"
+
+
+def stable_worker_id(worker_id: str) -> str:
+    """Under ``--reload`` the autoreloader restarts the process on every code change; keep
+    one worker id across restarts (passed through the environment) so each restart reuses
+    its Worker row instead of leaving a trail of never-stopped ones."""
+    if os.environ.get(DJANGO_AUTORELOAD_ENV) == "true":
+        return os.environ.get(WORKER_ID_ENV) or worker_id
+    os.environ[WORKER_ID_ENV] = worker_id
+    return worker_id
 
 
 class Command(DBWorkerCommand):
@@ -43,8 +56,11 @@ class Command(DBWorkerCommand):
         if heartbeat <= 0:
             raise CommandError("--heartbeat must be a positive number of seconds")
         self.configure_logging(verbosity)
+        logs.configure(self.stdout, verbosity)
         if reload and batch:
             reload = False
+        if reload:
+            worker_id = stable_worker_id(worker_id)
         queue_names = queue_name.split(",")
         excluded = exclude_queues.split(",") if exclude_queues else []
         if excluded and "*" not in queue_names:

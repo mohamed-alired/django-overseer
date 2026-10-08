@@ -102,9 +102,15 @@ class TestSettingsChecks:
     def test_bad_types_are_reported_not_crashed(self, settings):
         settings.OVERSEER_ALERT_WAIT_SECONDS = None
         settings.OVERSEER_RETRY_ALL_LIMIT = "many"
-        settings.OVERSEER_HEALTH_TOKEN = "short"
+        settings.OVERSEER_HEALTH_TOKEN = 12345
         ids = sorted({c.id for c in run_checks() if c.id.startswith("overseer.E")})
         assert ids == ["overseer.E004", "overseer.E005"]
+
+    def test_empty_token_is_off_and_short_token_only_warns(self, settings):
+        settings.OVERSEER_HEALTH_TOKEN = ""
+        assert not [c for c in run_checks() if c.id in ("overseer.E005", "overseer.W003")]
+        settings.OVERSEER_HEALTH_TOKEN = "short"
+        assert [c.id for c in run_checks() if c.id == "overseer.W003"] == ["overseer.W003"]
 
     def test_partial_index_warning(self, settings):
         from django.db import connection

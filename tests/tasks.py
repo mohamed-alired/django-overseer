@@ -145,3 +145,18 @@ def unique_recursive(n):
 @overseer.task(unique=True, backend="dummy")
 def unique_dummy(n):
     return n
+
+
+@overseer.task(retries=1, backoff="constant", backoff_base=0, jitter=False, backend="immediate")
+def exits_once():
+    """Simulates a worker forced to stop mid-task (SystemExit), then succeeds."""
+    CALLS.append(("exits_once", None))
+    if sum(1 for c in CALLS if c[0] == "exits_once") < 2:
+        raise SystemExit(1)
+    return "done"
+
+
+@task
+def optional_arg(x=1):
+    CALLS.append(("optional", x))
+    return x

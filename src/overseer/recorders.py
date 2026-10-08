@@ -12,16 +12,18 @@ import logging
 import socket
 from dataclasses import dataclass
 
-from django.db import transaction
 from django.db.models import F
 from django.tasks import TaskResultStatus
 from django.tasks.signals import task_enqueued, task_finished, task_started
 from django.utils import timezone
 
 from . import conf, registry
+from .db import atomic_for
 from .models import Job, JobSource, JobStatus, Run, RunStatus, Worker
 
 logger = logging.getLogger("overseer")
+
+INTERRUPTIONS = {"builtins.SystemExit", "builtins.KeyboardInterrupt"}
 
 
 @dataclass
@@ -67,7 +69,7 @@ def _safe(fn):
         try:
             # A savepoint, so that a database error here cannot poison a transaction the
             # caller has open (an immediate backend runs inside the caller's atomic block).
-            with transaction.atomic():
+            with atomic_for(Run):
                 fn(task_result)
         except Exception:  # pragma: no cover - defensive; tested via a forced failure
             logger.exception(
@@ -103,7 +105,7 @@ def record_enqueued(task_result):
     task = task_result.task
     policy = registry.get_policy(task.module_path)
     record_args = conf.get_setting("OVERSEER_RECORD_ARGS")
-    with transaction.atomic():
+    with atomic_for(Run):
         job = ctx.job
         if job is None:
             job = Job.objects.create(
@@ -144,14 +146,18 @@ def _get_run(task_result):
         return record_enqueued(task_result)
 
 
-def _touch_worker(task_result, run, *, finished=False, failed=False):
+def _touch_worker(task_result, run, *, finished=False, failed=False, local=True):
     worker_id = task_result.worker_ids[-1] if task_result.worker_ids else ""
     if not worker_id:
         return
     now = timezone.now()
     worker, _ = Worker.objects.get_or_create(
         worker_id=worker_id,
-        defaults={"hostname": socket.gethostname(), "backend": task_result.backend},
+        # The host is only known when this runs inside the worker process itself.
+        defaults={
+            "hostname": socket.gethostname() if local else "",
+            "backend": task_result.backend,
+        },
     )
     # A single UPDATE with F() expressions: counters stay exact even when several
     # processes report for the same worker id.
@@ -165,7 +171,8 @@ def _touch_worker(task_result, run, *, finished=False, failed=False):
     Worker.objects.filter(pk=worker.pk).update(**changes)
 
 
-def record_started(task_result):
+def record_started(task_result, *, local=True):
+    """``local`` is False when called by the scheduler's reconciliation, not the worker."""
     run = _get_run(task_result)
     if run.is_finished:
         return run
@@ -178,11 +185,12 @@ def record_started(task_result):
     run.wait_ms = _ms(ready_at, started_at)
     run.save(update_fields=["status", "started_at", "worker_id", "wait_ms"])
     Job.objects.filter(pk=run.job_id).update(status=JobStatus.RUNNING)
-    _touch_worker(task_result, run)
+    _touch_worker(task_result, run, local=local)
     return run
 
 
-def record_finished(task_result):
+def record_finished(task_result, *, local=True):
+    """``local`` is False when called by the scheduler's reconciliation, not the worker."""
     run = _get_run(task_result)
     if run.is_finished:
         return run
@@ -205,6 +213,9 @@ def record_finished(task_result):
         error = task_result.errors[-1]
         run.exception_class = error.exception_class_path[:255]
         run.traceback = error.traceback[-conf.get_setting("OVERSEER_MAX_TRACEBACK_CHARS") :]
+        if error.exception_class_path in INTERRUPTIONS:
+            # The worker was forced to stop mid-task; the task itself did not fail.
+            run.status = RunStatus.ABANDONED
     run.save()
 
     job = run.job
@@ -219,7 +230,7 @@ def record_finished(task_result):
         from . import retry
 
         retry.handle_failure(job, run)
-    _touch_worker(task_result, run, finished=True, failed=not succeeded)
+    _touch_worker(task_result, run, finished=True, failed=not succeeded, local=local)
     return run
 
 

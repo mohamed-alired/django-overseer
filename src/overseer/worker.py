@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import logging
 import os
 import socket
@@ -32,6 +33,7 @@ class HeartbeatWorker(DBWorker):
         self.heartbeat = heartbeat
         self._stop_heartbeat = threading.Event()
         self._thread: threading.Thread | None = None
+        self._stopped = False
 
     def register(self) -> Worker | None:
         """Create or revive this worker's row. A transient database error (a locked SQLite
@@ -67,19 +69,48 @@ class HeartbeatWorker(DBWorker):
         return row
 
     def beat(self) -> None:
-        Worker.objects.filter(worker_id=self.worker_id).update(
+        updated = Worker.objects.filter(worker_id=self.worker_id).update(
             last_seen_at=timezone.now(), stopped_at=None
         )
+        if not updated:
+            # Registration failed at startup, or the row was pruned: (re)create it so the
+            # worker is reported with its heartbeat, host and pid.
+            self._register()
 
     def _heartbeat_loop(self) -> None:
+        failing = False
         while not self._stop_heartbeat.wait(self.heartbeat):
             try:
                 self.beat()
-            except Exception:  # pragma: no cover - never let the heartbeat kill the worker
-                logger.exception("Overseer heartbeat failed for worker %s", self.worker_id)
+            except Exception as exc:  # never let the heartbeat kill the worker
+                if failing:  # one traceback per outage, then a line per missed beat
+                    logger.warning("Heartbeat for worker %s still failing: %s", self.worker_id, exc)
+                else:
+                    logger.exception("Overseer heartbeat failed for worker %s", self.worker_id)
+                failing = True
+            else:
+                if failing:
+                    logger.info("Heartbeat for worker %s recovered", self.worker_id)
+                failing = False
             finally:
                 close_old_connections()
         connections.close_all()
+
+    def _mark_stopped(self) -> None:
+        """Record the stop once; called from ``run`` and, for the autoreloader, at exit."""
+        if self._stopped:
+            return
+        self._stopped = True
+        self._stop_heartbeat.set()
+        if self._thread is not None:
+            self._thread.join(timeout=self.heartbeat + 1)
+        try:
+            Worker.objects.filter(worker_id=self.worker_id).update(
+                stopped_at=timezone.now(), last_seen_at=timezone.now(), current_run=None
+            )
+        except Exception:  # noqa: BLE001 - the database may be the reason we are stopping
+            logger.warning("Could not record the stop of worker %s", self.worker_id)
+        logger.info("Worker %s stopped after %d task(s)", self.worker_id, self._run_tasks)
 
     def run(self) -> None:
         self.register()
@@ -87,12 +118,10 @@ class HeartbeatWorker(DBWorker):
             target=self._heartbeat_loop, name=f"overseer-heartbeat-{self.worker_id}", daemon=True
         )
         self._thread.start()
+        # Under ``--reload`` Django runs this in a daemon thread and the autoreloader exits
+        # the process with ``sys.exit``; ``finally`` never runs there, ``atexit`` does.
+        atexit.register(self._mark_stopped)
         try:
             super().run()
         finally:
-            self._stop_heartbeat.set()
-            self._thread.join(timeout=self.heartbeat + 1)
-            Worker.objects.filter(worker_id=self.worker_id).update(
-                stopped_at=timezone.now(), last_seen_at=timezone.now(), current_run=None
-            )
-            logger.info("Worker %s stopped after %d task(s)", self.worker_id, self._run_tasks)
+            self._mark_stopped()

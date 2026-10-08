@@ -7,12 +7,13 @@ import logging
 import random
 from datetime import timedelta
 
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError
 from django.tasks import Task, task_backends
 from django.utils import timezone
 from django.utils.module_loading import import_string
 
 from . import conf, registry, signals
+from .db import atomic_for
 from .models import Job, JobSource, JobStatus, Run, RunStatus
 
 logger = logging.getLogger("overseer")
@@ -47,6 +48,10 @@ def should_retry(job: Job, run: Run) -> bool:
     policy = registry.get_policy(job.task_path)
     if run.attempt > policy.retries:
         return False
+    if run.status == RunStatus.ABANDONED:
+        # A lost worker or a forced stop is not the task's doing: ``retry_on`` is about
+        # exceptions the task raised.
+        return True
     return issubclass(_exception_class(run), policy.retry_on)
 
 
@@ -54,19 +59,15 @@ class RetryUnavailable(ValueError):
     """The job cannot be enqueued again (its arguments are gone, or its key is taken)."""
 
 
-def requires_arguments(task) -> bool:
-    """Whether the task function cannot be called with no arguments at all."""
+def takes_no_arguments(task) -> bool:
+    """Whether the task function has no parameters at all (besides the task context)."""
     try:
         params = list(inspect.signature(task.func).parameters.values())
     except (TypeError, ValueError):  # pragma: no cover - builtins, C functions
         return False
     if task.takes_context and params:
         params = params[1:]
-    return any(
-        p.default is inspect.Parameter.empty
-        and p.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
-        for p in params
-    )
+    return not params
 
 
 def task_arguments(job: Job, previous: Run | None) -> tuple[list, dict]:
@@ -87,7 +88,9 @@ def task_arguments(job: Job, previous: Run | None) -> tuple[list, dict]:
             return list(result.args), dict(result.kwargs)
     if job.args or job.kwargs or conf.get_setting("OVERSEER_RECORD_ARGS"):
         return list(job.args), dict(job.kwargs)
-    if not requires_arguments(job.get_task()):
+    if takes_no_arguments(job.get_task()):
+        # Nothing could have been passed, so nothing is missing. A task with optional
+        # parameters is not retried blind: it may have been enqueued with values.
         return [], {}
     raise RetryUnavailable(
         "This job's arguments were not recorded (OVERSEER_RECORD_ARGS is off) and the "
@@ -119,7 +122,7 @@ def enqueue_retry(
     if run_after is not None:
         task = task.using(run_after=run_after)
     try:
-        with transaction.atomic():
+        with atomic_for(Job):
             Job.objects.filter(pk=job.pk).update(
                 status=JobStatus.PENDING, next_retry_at=run_after, source=source, finished_at=None
             )
@@ -179,7 +182,7 @@ def retry_job(job: Job) -> Run:
     Only failed or cancelled jobs can be retried. Raises ``ValueError`` (with a message for
     the user) when the job is not retryable or cannot be enqueued again.
     """
-    with transaction.atomic():
+    with atomic_for(Job):
         # Lock the job so two dashboards clicking "retry" at once enqueue a single attempt.
         job = Job.objects.select_for_update().get(pk=job.pk)
         previous = job.runs.order_by("-attempt").first()

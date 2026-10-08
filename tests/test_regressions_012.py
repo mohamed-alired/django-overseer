@@ -238,3 +238,35 @@ class TestPruneSilentWorkers:
             "plain-fresh",
             "beat-quiet",
         }
+
+
+class TestSecondReviewFindings:
+    def test_task_with_optional_parameters_is_not_retried_blind(self, settings, worker):
+        settings.OVERSEER_RECORD_ARGS = False
+        tasks.optional_arg.enqueue(5)
+        worker()
+        job = Job.objects.get()
+        Job.objects.filter(pk=job.pk).update(status=JobStatus.FAILED)
+        DBTaskResult.objects.all().delete()
+        from overseer.retry import retry_job
+
+        with pytest.raises(ValueError, match="not recorded"):
+            retry_job(job)
+
+    def test_reconciliation_looks_runs_up_in_bulk(self, django_assert_max_num_queries):
+        for i in range(30):
+            tasks.plain.enqueue(i)
+        Run.objects.update(enqueued_at=timezone.now() - timedelta(minutes=5))
+        with django_assert_max_num_queries(4):
+            assert rescue.reconcile_waiting() == {"lost": 0, "recorded": 0}
+
+    def test_lost_running_key_holder_is_abandoned_and_the_key_moves_on(self, worker):
+        tasks.unique_by_args.enqueue("hold@example.com")
+        run = Run.objects.get()
+        Run.objects.filter(pk=run.pk).update(status=RunStatus.RUNNING, started_at=timezone.now())
+        Job.objects.filter(pk=run.job_id).update(status=JobStatus.RUNNING)
+        DBTaskResult.objects.all().delete()
+        result = tasks.unique_by_args.enqueue("hold@example.com")  # must not raise
+        assert result is not None
+        run.refresh_from_db()
+        assert run.status == RunStatus.ABANDONED

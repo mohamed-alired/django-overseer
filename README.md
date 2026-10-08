@@ -313,6 +313,12 @@ immediately. Recorders never raise: a bug in Overseer cannot break your worker.
   `"OPTIONS": {"transaction_mode": "IMMEDIATE", "timeout": 20, "init_command": "PRAGMA
   journal_mode=WAL;"}`. Without it a writer that already read in the same transaction can
   fail with "database is locked" instead of waiting.
+- `USE_TZ = False` projects are supported; cron expressions are evaluated in the
+  schedule's timezone and stored as naive local times like everything else.
+- Overseer's tables may live on another database alias through a router (`db_for_read`,
+  `db_for_write` and `allow_migrate` for the `overseer` and task-backend apps).
+- `overseer_worker --reload` (on by default when `DEBUG` is on) keeps one worker id across
+  the autoreloader's restarts, so the dashboard shows one worker, not one per code change.
 - `unique=True` is enforced by a partial unique index. MySQL, MariaDB and Oracle have no
   partial indexes, so there Overseer can only reduce duplicates, not rule them out; system
   check `overseer.W002` says so at startup.

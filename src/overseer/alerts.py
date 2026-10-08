@@ -37,7 +37,7 @@ def detect(now=None) -> list[Condition]:
     since = now - window
     found: list[Condition] = []
 
-    rate_threshold = conf.get_setting("OVERSEER_ALERT_FAILURE_RATE")
+    rate_threshold = float(conf.get_setting("OVERSEER_ALERT_FAILURE_RATE") or 0)
     finished = (
         Run.objects.filter(finished_at__gte=since)
         .exclude(status=RunStatus.CANCELLED)  # never executed: not part of the rate
@@ -62,7 +62,7 @@ def detect(now=None) -> list[Condition]:
                     )
                 )
 
-    wait_threshold = conf.get_setting("OVERSEER_ALERT_WAIT_SECONDS")
+    wait_threshold = float(conf.get_setting("OVERSEER_ALERT_WAIT_SECONDS") or 0)
     worst_wait: dict[str, float] = {}
     started = (
         Run.objects.filter(started_at__gte=since, wait_ms__isnull=False)
@@ -88,7 +88,7 @@ def detect(now=None) -> list[Condition]:
                 )
             )
 
-    depth_threshold = conf.get_setting("OVERSEER_ALERT_QUEUE_DEPTH")
+    depth_threshold = int(conf.get_setting("OVERSEER_ALERT_QUEUE_DEPTH") or 0)
     depths = (
         Run.objects.filter(status=RunStatus.READY)
         .filter(Q(run_after__isnull=True) | Q(run_after__lte=now))

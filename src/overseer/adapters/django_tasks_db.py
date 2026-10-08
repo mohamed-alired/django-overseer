@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from django.db import transaction
 from django.db.models import Count
 from django.utils import timezone
 
+from ..db import atomic_for
 from ..models import RunStatus
 from .base import BaseAdapter
 
@@ -21,7 +21,7 @@ class DatabaseAdapter(BaseAdapter):
 
     def cancel(self, run) -> bool:
         DBTaskResult = self._model()
-        with transaction.atomic():
+        with atomic_for(DBTaskResult):
             deleted, _ = (
                 DBTaskResult.objects.select_for_update(skip_locked=True)
                 .filter(id=run.result_id, status="READY")
@@ -45,6 +45,12 @@ class DatabaseAdapter(BaseAdapter):
         if queue_name:
             qs = qs.filter(queue_name=queue_name)
         return qs.count()
+
+    def result_statuses(self, result_ids):
+        DBTaskResult = self._model()
+        rows = DBTaskResult.objects.filter(id__in=result_ids).values_list("id", "status")
+        found = {str(pk): status for pk, status in rows}  # UUID keys vs. the runs' str ids
+        return {rid: found.get(rid) for rid in result_ids}
 
     def queue_depths(self, queue_names):
         DBTaskResult = self._model()

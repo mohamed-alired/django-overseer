@@ -15,7 +15,7 @@ DEFAULTS = {
     # A heartbeat worker not seen for this many seconds is shown as offline.
     "OVERSEER_WORKER_OFFLINE_AFTER": 120,
     # Workers without heartbeats (plain db_worker) are only seen when they run a task; one
-    # silent for this long is no longer counted, and is pruned after OVERSEER_RETENTION_DAYS.
+    # silent for this long is no longer counted, and is pruned after a day (or this, if longer).
     "OVERSEER_SILENT_WORKER_AFTER": 3600,
     # Retention, applied by ``overseer_prune``.
     "OVERSEER_RETENTION_DAYS": 14,

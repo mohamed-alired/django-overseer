@@ -35,7 +35,7 @@ Delay before attempt *n* (n ≥ 2):
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `OVERSEER_RETENTION_DAYS` | `14` | `overseer_prune` deletes finished jobs (with their runs), resolved alerts and silent workers older than this; `0` is allowed |
+| `OVERSEER_RETENTION_DAYS` | `14` | `overseer_prune` deletes finished jobs (with their runs), resolved alerts and silent workers older than this (the setting must be at least 1; `overseer_prune --days 0` deletes everything finished) |
 | `OVERSEER_METRICS_RETENTION_DAYS` | `30` | metric buckets older than this are deleted |
 | `OVERSEER_RECORD_ARGS` | `True` | store task args and kwargs on the `Job` |
 | `OVERSEER_MAX_TRACEBACK_CHARS` | `20000` | tracebacks are truncated to this length |
@@ -85,10 +85,11 @@ scheduler and the web process each need to import them.
 
 ## System checks
 
-- `overseer.E001`–`E003`: invalid `OVERSEER_DEFAULT_BACKOFF`, negative retries, or a
-  `OVERSEER_PERMISSION` that is not `app_label.codename`.
+- `overseer.E001`–`E003`: invalid `OVERSEER_DEFAULT_BACKOFF`, a `OVERSEER_PERMISSION` that
+  is not `app_label.codename`, or a retention setting below 1.
 - `overseer.E004`/`E005`: a numeric setting that is not a number, or an `OVERSEER_HEALTH_TOKEN`
-  that is not a string of at least 16 characters.
+  that is not a string (`""` and `None` both mean "no token"); `W003` when the token is
+  shorter than 16 characters.
 - `overseer.W002`: the database has no partial unique indexes (MySQL, MariaDB, Oracle), so
   `unique=True` cannot be guaranteed there.
 - `overseer.W001`: a task with delayed retries (`backoff_base` above 0) uses a backend

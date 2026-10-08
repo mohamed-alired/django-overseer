@@ -31,15 +31,32 @@ Fixes from a review of 0.1.1, two of them regressions introduced there. No new m
   after a day.
 - Cron is as fast as 0.1.0 again away from daylight-saving changes.
 
+### Also
+- Projects with `USE_TZ = False` could not use cron schedules at all (every one was
+  reported as an error and disabled). Naive local datetimes are now handled throughout,
+  including `overseer_rollup --since`.
+- `overseer_worker --reload` (the default when `DEBUG` is on) keeps one worker id across
+  restarts and records each stop, instead of leaving a never-stopped "offline" worker
+  behind on every code change.
+- Overseer's tables can live on a non-default database alias through a router: locking
+  transactions now open on that alias (PostgreSQL raised a transaction error before).
+- A task interrupted by a forced worker stop (`SystemExit`) is recorded as abandoned and
+  retried under its policy instead of counting as a task failure.
+- A heartbeat whose row was pruned or never created re-creates it, so the worker is not
+  stuck as "no heartbeat"; a database outage logs one traceback, then one line per beat.
+- `overseer_worker` and `overseer_scheduler` log to the console when the project has no
+  logging configuration for the `overseer` logger.
+
 ### Dashboard and API
 - The job page heading refreshes with the rest of the page.
-- Cancelling a job whose backend alias was removed, a NUL byte in a filter on
-  PostgreSQL, and `OVERSEER_ALERT_WAIT_SECONDS = None` no longer give a 500.
+- Cancelling a job whose backend alias was removed and a NUL byte in a filter on
+  PostgreSQL no longer give a 500; a `None` alert threshold is treated as 0 (and flagged
+  by system check `E004`).
 - The health token's `Bearer` scheme is case-insensitive; 401 responses carry
   `WWW-Authenticate` and health responses `Cache-Control: no-store`.
 - The Metrics page window labels read like the other pages'.
 - New system checks: `E004`/`E005` for mistyped settings, `W002` where the database cannot
-  enforce unique tasks (MySQL, MariaDB, Oracle).
+  enforce unique tasks (MySQL, MariaDB, Oracle), `W003` for a short health token.
 - Documentation corrected where it promised columns the Queues, Tasks and Job pages do not
   have, and `?minutes=` on pages that do not take it.
 

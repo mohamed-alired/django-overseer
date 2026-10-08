@@ -18,6 +18,7 @@ from django.tasks.base import (
 from django.tasks.exceptions import TaskResultDoesNotExist
 
 from . import conf, registry
+from .db import atomic_for
 from .registry import TaskPolicy
 from .scheduling import registry as schedule_registry
 
@@ -49,7 +50,7 @@ class OverseerTask(DjangoTask):
         """
         from django.utils import timezone
 
-        from .models import Job, JobStatus
+        from .models import Job, JobStatus, RunStatus
 
         existing = (
             Job.objects.filter(unique_key=key, status__in=[JobStatus.PENDING, JobStatus.RUNNING])
@@ -76,14 +77,25 @@ class OverseerTask(DjangoTask):
         try:
             return backend.get_result(run.result_id)
         except TaskResultDoesNotExist:
-            # The backend lost the task behind the active run; it will never execute.
-            from .rescue import mark_lost
+            # The backend lost the task behind the active run: it will never execute (or
+            # finish). A waiting run is lost; a running one is abandoned, which may enqueue
+            # the next attempt under the same key, whose result is then handed back.
+            from .rescue import abandon, mark_lost
 
-            mark_lost(run)
+            if run.status == RunStatus.RUNNING:
+                abandon(run)
+                latest = existing.runs.order_by("-attempt").first()
+                if latest is not None and latest.pk != run.pk:
+                    try:
+                        return backend.get_result(latest.result_id)
+                    except TaskResultDoesNotExist:  # pragma: no cover
+                        return None
+            else:
+                mark_lost(run)
             return None
 
     def enqueue(self, *args, **kwargs):
-        from django.db import IntegrityError, transaction
+        from django.db import IntegrityError
 
         from . import recorders
         from .models import Job, JobSource, JobStatus
@@ -105,7 +117,7 @@ class OverseerTask(DjangoTask):
         record_args = conf.get_setting("OVERSEER_RECORD_ARGS")
         for _ in range(3):
             try:
-                with transaction.atomic():
+                with atomic_for(Job):
                     job = Job.objects.create(
                         task_path=self.module_path,
                         task_name=self.name,

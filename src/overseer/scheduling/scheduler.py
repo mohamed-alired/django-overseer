@@ -7,12 +7,13 @@ import signal
 import time
 from datetime import timedelta
 
-from django.db import close_old_connections, transaction
+from django.db import close_old_connections
 from django.db.models import F
 from django.utils import timezone
 from django.utils.module_loading import import_string
 
 from .. import conf
+from ..db import atomic_for
 from ..models import Job, JobSource, Schedule
 from .cron import parse
 from .validation import check_schedule, schedule_timezone
@@ -27,9 +28,15 @@ def compute_next_run(schedule: Schedule, after=None):
     """
     after = after or timezone.now()
     check_schedule(schedule)
+    # Projects with USE_TZ = False work in naive local time; cron needs aware datetimes.
+    naive = timezone.is_naive(after)
+    if naive:
+        after = timezone.make_aware(after)
     if schedule.cron:
-        return parse(schedule.cron).next_after(after, tz=schedule_timezone(schedule))
-    return after + timedelta(seconds=schedule.interval_seconds)
+        result = parse(schedule.cron).next_after(after, tz=schedule_timezone(schedule))
+    else:
+        result = after + timedelta(seconds=schedule.interval_seconds)
+    return timezone.make_naive(result) if naive else result
 
 
 def disable_broken(schedule: Schedule, exc: Exception) -> None:
@@ -79,7 +86,7 @@ def tick(now=None) -> list[Job]:
     """
     now = now or timezone.now()
     jobs = []
-    with transaction.atomic():
+    with atomic_for(Schedule):
         unscheduled = Schedule.objects.select_for_update(skip_locked=True).filter(
             enabled=True, next_run_at__isnull=True
         )
@@ -104,7 +111,7 @@ def tick(now=None) -> list[Job]:
                 continue
             job, error = None, ""
             try:
-                with transaction.atomic():  # a failed enqueue must not poison the others
+                with atomic_for(Job):  # a failed enqueue must not poison the others
                     job = enqueue_schedule(schedule)
             except Exception as exc:
                 logger.exception(

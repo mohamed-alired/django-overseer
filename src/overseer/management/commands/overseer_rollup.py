@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
@@ -20,7 +21,9 @@ class Command(BaseCommand):
                 since = timezone.datetime.combine(day, timezone.datetime.min.time())
             if since is None:
                 raise CommandError(f"--since: {raw!r} is not an ISO date or datetime")
-            if timezone.is_naive(since):
+            if settings.USE_TZ and timezone.is_naive(since):
                 since = timezone.make_aware(since)
+            elif not settings.USE_TZ and timezone.is_aware(since):
+                since = timezone.make_naive(since)
         written = rollup(since=since)
         self.stdout.write(self.style.SUCCESS(f"Wrote {written} metric bucket(s)."))

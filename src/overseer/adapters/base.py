@@ -41,6 +41,19 @@ class BaseAdapter:
         """``queue_depth`` for several queues; adapters override it with one query."""
         return {name: self.queue_depth(name) for name in queue_names}
 
+    def result_statuses(self, result_ids: list[str]) -> dict[str, str | None]:
+        """The backend's status (a ``TaskResultStatus`` value) for each result id; None when
+        the backend no longer has it. Adapters override it with one query."""
+        from django.tasks.exceptions import TaskResultDoesNotExist
+
+        statuses: dict[str, str | None] = {}
+        for result_id in result_ids:
+            try:
+                statuses[result_id] = self.backend.get_result(result_id).status
+            except TaskResultDoesNotExist:
+                statuses[result_id] = None
+        return statuses
+
 
 class GenericAdapter(BaseAdapter):
     pass

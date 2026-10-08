@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import logging
 
-from django.db import transaction
 from django.utils import timezone
 
+from ..db import atomic_for
 from ..models import Schedule
 from . import registry
 from .scheduler import compute_next_run
@@ -48,7 +48,7 @@ def sync_schedules(now=None, *, enable_all: bool = False) -> dict[str, list[str]
         "errors": [],
     }
     specs = registry.all_specs()
-    with transaction.atomic():
+    with atomic_for(Schedule):
         existing = {s.name: s for s in Schedule.objects.select_for_update().filter(name__in=specs)}
         for name, spec in specs.items():
             values = {f: getattr(spec, f) for f in SPEC_FIELDS}

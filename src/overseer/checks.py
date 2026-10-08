@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.core.checks import Error, Tags, Warning, register
 from django.tasks import task_backends
 
@@ -53,16 +55,18 @@ def check_settings(app_configs, **kwargs):
             errors.append(Error(f"{name} must be at least 1.", id="overseer.E003"))
     for name in NUMERIC_SETTINGS:
         value = conf.get_setting(name)
-        if isinstance(value, bool) or not isinstance(value, int | float) or value < 0:
+        if isinstance(value, bool) or not isinstance(value, int | float | Decimal) or value < 0:
             errors.append(Error(f"{name} must be a non-negative number.", id="overseer.E004"))
         elif name == "OVERSEER_RETRY_ALL_LIMIT" and value < 1:
             errors.append(Error(f"{name} must be at least 1.", id="overseer.E004"))
     token = conf.get_setting("OVERSEER_HEALTH_TOKEN")
-    if token is not None and (not isinstance(token, str) or len(token) < 16):
+    if token is not None and not isinstance(token, str):
+        errors.append(Error("OVERSEER_HEALTH_TOKEN must be a string or None.", id="overseer.E005"))
+    elif token and len(token) < 16:
         errors.append(
-            Error(
-                "OVERSEER_HEALTH_TOKEN must be a string of at least 16 characters.",
-                id="overseer.E005",
+            Warning(
+                "OVERSEER_HEALTH_TOKEN is shorter than 16 characters; use a longer secret.",
+                id="overseer.W003",
             )
         )
     return errors

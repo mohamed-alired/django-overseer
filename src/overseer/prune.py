@@ -28,8 +28,12 @@ def prune(now=None, *, days: int | None = None, metrics_days: int | None = None)
     # Open alerts stay: deleting one would make a persisting condition fire (and notify) again.
     alerts, _ = Alert.objects.filter(created_at__lt=cutoff, resolved_at__isnull=False).delete()
     # Plain db_worker processes get a new random id on every start and never report a stop,
-    # so their rows are dropped once silent for a day; heartbeat workers keep the retention.
-    silent_cutoff = now - timedelta(days=1)
+    # so their rows are dropped once silent for a day (or OVERSEER_SILENT_WORKER_AFTER when
+    # that is longer); heartbeat workers keep the retention.
+    silent_for = max(
+        timedelta(days=1), timedelta(seconds=conf.get_setting("OVERSEER_SILENT_WORKER_AFTER"))
+    )
+    silent_cutoff = now - silent_for
     workers, _ = Worker.objects.filter(
         Q(last_seen_at__lt=cutoff)
         | Q(heartbeat_seconds__isnull=True, stopped_at__isnull=True, last_seen_at__lt=silent_cutoff)

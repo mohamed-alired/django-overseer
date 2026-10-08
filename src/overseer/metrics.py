@@ -7,10 +7,11 @@ import math
 from collections import defaultdict
 from datetime import datetime, timedelta
 
-from django.db import IntegrityError, connection, transaction
+from django.db import IntegrityError
 from django.db.models import Max, Q
 from django.utils import timezone
 
+from .db import atomic_for, features_for
 from .models import MetricBucket, Run, RunStatus
 
 logger = logging.getLogger("overseer")
@@ -134,11 +135,11 @@ def rollup(since: datetime | None = None, until: datetime | None = None) -> int:
         for (start, queue, task), agg in buckets.items()
     ]
     unique = ["bucket_start", "queue_name", "task_path"]
-    with transaction.atomic():
-        MetricBucket.objects.filter(bucket_start__gte=since, bucket_start__lt=until).delete()
-        if connection.features.supports_update_conflicts_with_target:
-            # An upsert: two schedulers rolling up the same minute at once must not collide
-            # on the unique (bucket_start, queue_name, task_path) constraint.
+    if features_for(MetricBucket).supports_update_conflicts_with_target:
+        # An upsert: two schedulers rolling up the same minute at once must not collide on
+        # the unique (bucket_start, queue_name, task_path) constraint.
+        with atomic_for(MetricBucket):
+            MetricBucket.objects.filter(bucket_start__gte=since, bucket_start__lt=until).delete()
             MetricBucket.objects.bulk_create(
                 rows,
                 batch_size=500,
@@ -146,15 +147,17 @@ def rollup(since: datetime | None = None, until: datetime | None = None) -> int:
                 unique_fields=unique,
                 update_fields=METRIC_FIELDS,
             )
-        else:
-            # MySQL, MariaDB and Oracle cannot upsert on a target: insert, and if another
-            # scheduler wrote the same minutes first, let its rows stand.
-            try:
-                with transaction.atomic():
-                    MetricBucket.objects.bulk_create(rows, batch_size=500)
-            except IntegrityError:
-                logger.info("Metric rollup for %s-%s was written by another process", since, until)
-                return 0
+        return len(rows)
+    # MySQL, MariaDB and Oracle cannot upsert on a target: delete and insert in one
+    # transaction, and if another scheduler wrote the same minutes first, let its rows
+    # stand (the delete rolls back with the failed insert).
+    try:
+        with atomic_for(MetricBucket):
+            MetricBucket.objects.filter(bucket_start__gte=since, bucket_start__lt=until).delete()
+            MetricBucket.objects.bulk_create(rows, batch_size=500)
+    except IntegrityError:
+        logger.info("Metric rollup for %s-%s was written by another process", since, until)
+        return 0
     return len(rows)
 
 

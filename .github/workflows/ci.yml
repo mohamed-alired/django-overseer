@@ -52,6 +52,10 @@ jobs:
         run: python -m django makemigrations overseer --check --dry-run
       - name: Unit, dashboard, E2E and performance tests (SQLite in memory)
         run: pytest --cov --cov-report=term-missing
+      - name: USE_TZ = False and database-router configurations
+        run: |
+          pytest --ds=tests.settings_naive tests/test_naive_time.py -q
+          pytest --ds=tests.settings_multidb tests/test_multidb.py -q
       - name: Integration tests with real worker and scheduler processes (SQLite file)
         env:
           OVERSEER_SQLITE_FILE: ${{ runner.temp }}/overseer.sqlite3
