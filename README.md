@@ -207,17 +207,17 @@ it. Use `overseer_worker` when you want to know a worker died.
 | Page | Content |
 | --- | --- |
 | Overview | throughput, failure rate, runtimes, waiting / running / scheduled counts, workers online, runs-per-minute chart, queue table, recent failures, open alerts |
-| Queues | per queue: waiting, running, processed, failed, failure rate, average and p95 runtime, average wait and the backend's own depth when the adapter supports it |
-| Tasks | the same per task path, with the declared policy |
+| Queues | per queue: waiting, scheduled, running, processed, failed, average wait and runtime, and the backend's own depth when the adapter supports it |
+| Tasks | per task path: processed, succeeded, failed, failure rate, average and maximum runtime, last run |
 | Jobs | filter by status, queue, task, worker; free-text search over task path, job id, result id and unique key |
-| Job | arguments, policy, every attempt with timing, worker, exception and traceback, return value; retry / cancel / dismiss |
+| Job | arguments, attempts allowed, every attempt with timing, worker, exception and traceback, return value; retry / cancel / dismiss |
 | Failed | open failures with the last error; retry all / dismiss all |
 | Schedules | next and last run, run count, pause / resume / run now / sync |
-| Workers | host, pid, queues, last heartbeat, current run, counters; a heartbeat worker is offline after `OVERSEER_WORKER_OFFLINE_AFTER` or three missed beats, whichever is longer |
+| Workers | host, pid, queues, last seen, current run, counters; a heartbeat worker is offline after `OVERSEER_WORKER_OFFLINE_AFTER` or three missed beats, whichever is longer; a plain `db_worker` shows "no heartbeat", or "silent" once it has not run anything for `OVERSEER_SILENT_WORKER_AFTER` |
 | Metrics | per-minute runs and p95 runtime for the last 15 minutes to 24 hours, per queue |
 | Alerts | open and resolved alerts |
 
-Every page accepts `?minutes=15|60|360|1440`. Panels refresh every
+Overview, Queues, Tasks and Metrics accept `?minutes=15|60|360|1440`. Panels refresh every
 `OVERSEER_REFRESH_SECONDS` seconds (there is a pause button). The same data is available as
 JSON under `/overseer/api/...` for the logged-in user, plus `/overseer/api/health/`, which
 returns HTTP 503 when a ready task has waited longer than `OVERSEER_ALERT_WAIT_SECONDS`,
@@ -261,6 +261,7 @@ OVERSEER_DEFAULT_JITTER = True
 OVERSEER_DEFAULT_TIMEOUT = None
 OVERSEER_STALE_AFTER = 3600            # a running attempt with no timeout is abandoned after this
 OVERSEER_WORKER_OFFLINE_AFTER = 120
+OVERSEER_SILENT_WORKER_AFTER = 3600    # a plain db_worker silent this long leaves the counts
 OVERSEER_RETENTION_DAYS = 14
 OVERSEER_METRICS_RETENTION_DAYS = 30
 OVERSEER_RECORD_ARGS = True            # False to keep task arguments out of the database
@@ -312,6 +313,12 @@ immediately. Recorders never raise: a bug in Overseer cannot break your worker.
   `"OPTIONS": {"transaction_mode": "IMMEDIATE", "timeout": 20, "init_command": "PRAGMA
   journal_mode=WAL;"}`. Without it a writer that already read in the same transaction can
   fail with "database is locked" instead of waiting.
+- `unique=True` is enforced by a partial unique index. MySQL, MariaDB and Oracle have no
+  partial indexes, so there Overseer can only reduce duplicates, not rule them out; system
+  check `overseer.W002` says so at startup.
+- A waiting run whose backend task disappeared (database restored, row deleted by hand)
+  is marked lost by the scheduler's rescue pass, so health, alerts and unique keys move on;
+  the job can be retried from the dashboard.
 - Recording happens in the same database transaction as the enqueue: with
   `django-tasks-db`, a task enqueued inside a transaction that rolls back leaves neither a
   backend row nor an Overseer job. A backend that runs tasks elsewhere (the immediate

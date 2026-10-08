@@ -34,7 +34,7 @@ def worker_counts(now=None) -> dict:
     so whether they are alive cannot be known; they are counted apart.
     """
     now = now or timezone.now()
-    active = list(Worker.objects.filter(stopped_at__isnull=True))
+    active = [w for w in Worker.objects.filter(stopped_at__isnull=True) if not w.is_silent(now)]
     online = sum(1 for w in active if w.is_online(now))
     return {
         "workers_online": online,
@@ -196,7 +196,7 @@ def workers(now=None) -> list[dict]:
         if w.stopped_at:
             state = "stopped"
         elif online is None:
-            state = "no heartbeat"
+            state = "silent" if w.is_silent(now) else "no heartbeat"
         else:
             state = "online" if online else "offline"
         out.append(

@@ -245,6 +245,16 @@ class Worker(models.Model):
         now = now or timezone.now()
         return (now - self.last_seen_at).total_seconds() < self.offline_after()
 
+    def is_silent(self, now=None) -> bool:
+        """A worker without heartbeats that has not run anything for a long time."""
+        from . import conf
+
+        if self.has_heartbeat or self.stopped_at is not None:
+            return False
+        now = now or timezone.now()
+        silent_after = conf.get_setting("OVERSEER_SILENT_WORKER_AFTER")
+        return (now - self.last_seen_at).total_seconds() >= silent_after
+
 
 class MetricBucket(models.Model):
     """Per-minute rollup per queue and task (``task_path == ""`` means all tasks)."""

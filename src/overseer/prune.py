@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+from django.db.models import Q
 from django.utils import timezone
 
 from . import conf
@@ -26,7 +27,13 @@ def prune(now=None, *, days: int | None = None, metrics_days: int | None = None)
     buckets, _ = MetricBucket.objects.filter(bucket_start__lt=metrics_cutoff).delete()
     # Open alerts stay: deleting one would make a persisting condition fire (and notify) again.
     alerts, _ = Alert.objects.filter(created_at__lt=cutoff, resolved_at__isnull=False).delete()
-    workers, _ = Worker.objects.filter(last_seen_at__lt=cutoff).delete()
+    # Plain db_worker processes get a new random id on every start and never report a stop,
+    # so their rows are dropped once silent for a day; heartbeat workers keep the retention.
+    silent_cutoff = now - timedelta(days=1)
+    workers, _ = Worker.objects.filter(
+        Q(last_seen_at__lt=cutoff)
+        | Q(heartbeat_seconds__isnull=True, stopped_at__isnull=True, last_seen_at__lt=silent_cutoff)
+    ).delete()
     return {
         "jobs": by_model.get("overseer.Job", 0),
         "runs": by_model.get("overseer.Run", 0),

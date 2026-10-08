@@ -12,8 +12,11 @@ DEFAULTS = {
     "OVERSEER_DEFAULT_TIMEOUT": None,  # seconds; None = no timeout
     # A running run with no timeout is treated as abandoned after this many seconds.
     "OVERSEER_STALE_AFTER": 3600,
-    # A worker not seen for this many seconds is shown as offline.
+    # A heartbeat worker not seen for this many seconds is shown as offline.
     "OVERSEER_WORKER_OFFLINE_AFTER": 120,
+    # Workers without heartbeats (plain db_worker) are only seen when they run a task; one
+    # silent for this long is no longer counted, and is pruned after OVERSEER_RETENTION_DAYS.
+    "OVERSEER_SILENT_WORKER_AFTER": 3600,
     # Retention, applied by ``overseer_prune``.
     "OVERSEER_RETENTION_DAYS": 14,
     "OVERSEER_METRICS_RETENTION_DAYS": 30,

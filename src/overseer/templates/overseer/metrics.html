@@ -4,7 +4,7 @@
 {% block meta %}
 <form class="filters" method="get">
   <select name="queue" onchange="this.form.submit()"><option value="">All queues</option>{% for q in queue_names %}<option value="{{ q }}" {% if queue == q %}selected{% endif %}>{{ q }}</option>{% endfor %}</select>
-  <select name="minutes" onchange="this.form.submit()">{% for w in windows %}<option value="{{ w }}" {% if w == minutes %}selected{% endif %}>Last {{ w }} min</option>{% endfor %}</select>
+  <select name="minutes" onchange="this.form.submit()">{% for value, label in window_choices %}<option value="{{ value }}" {% if value == minutes %}selected{% endif %}>Last {{ label }}</option>{% endfor %}</select>
 </form>
 {% endblock %}
 {% block content %}

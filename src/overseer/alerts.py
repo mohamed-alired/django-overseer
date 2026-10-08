@@ -40,6 +40,7 @@ def detect(now=None) -> list[Condition]:
     rate_threshold = conf.get_setting("OVERSEER_ALERT_FAILURE_RATE")
     finished = (
         Run.objects.filter(finished_at__gte=since)
+        .exclude(status=RunStatus.CANCELLED)  # never executed: not part of the rate
         .values("job__queue_name")
         .annotate(
             total=Count("id"),

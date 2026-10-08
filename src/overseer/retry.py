@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
 import random
 from datetime import timedelta
@@ -53,12 +54,28 @@ class RetryUnavailable(ValueError):
     """The job cannot be enqueued again (its arguments are gone, or its key is taken)."""
 
 
+def requires_arguments(task) -> bool:
+    """Whether the task function cannot be called with no arguments at all."""
+    try:
+        params = list(inspect.signature(task.func).parameters.values())
+    except (TypeError, ValueError):  # pragma: no cover - builtins, C functions
+        return False
+    if task.takes_context and params:
+        params = params[1:]
+    return any(
+        p.default is inspect.Parameter.empty
+        and p.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+        for p in params
+    )
+
+
 def task_arguments(job: Job, previous: Run | None) -> tuple[list, dict]:
     """The arguments to call the task with again.
 
     The backend's own copy is preferred: it is exact (``Job.args`` went through a JSON
     round trip) and it exists even when ``OVERSEER_RECORD_ARGS`` is off. Without it the
-    recorded arguments are used; when neither exists the job cannot be retried.
+    recorded arguments are used. When the arguments were not recorded, the backend no
+    longer has them and the task needs some, the job cannot be retried.
     """
     if previous is not None:
         try:
@@ -68,8 +85,10 @@ def task_arguments(job: Job, previous: Run | None) -> tuple[list, dict]:
             result = None
         if result is not None:
             return list(result.args), dict(result.kwargs)
-    if conf.get_setting("OVERSEER_RECORD_ARGS") or job.args or job.kwargs:
+    if job.args or job.kwargs or conf.get_setting("OVERSEER_RECORD_ARGS"):
         return list(job.args), dict(job.kwargs)
+    if not requires_arguments(job.get_task()):
+        return [], {}
     raise RetryUnavailable(
         "This job's arguments were not recorded (OVERSEER_RECORD_ARGS is off) and the "
         "backend no longer has them, so it cannot be retried."
@@ -144,7 +163,13 @@ def handle_failure(job: Job, run: Run) -> Run | None:
         next_retry_at=None,
     )
     job.status = JobStatus.FAILED
-    signals.job_failed.send(sender=Job, job=job, run=run)
+    # send_robust: a receiver that raises (mail server down, say) must not undo the recording
+    # of the failure, which the worker's signal handler runs in a savepoint.
+    for receiver, response in signals.job_failed.send_robust(sender=Job, job=job, run=run):
+        if isinstance(response, Exception):
+            logger.error(
+                "job_failed receiver %r failed for job %s", receiver, job.pk, exc_info=response
+            )
     return None
 
 

@@ -121,3 +121,27 @@ def parent_immediate(x):
 def unique_parent_immediate(x):
     child.enqueue(x)
     return x
+
+
+# --- 0.1.2 regression tasks -------------------------------------------------------------
+
+
+@overseer.task(retries=2, backoff="constant", backoff_base=0, jitter=False, backend="immediate")
+def zero_arg_flaky():
+    CALLS.append(("zero_arg", None))
+    if sum(1 for c in CALLS if c[0] == "zero_arg") < 2:
+        raise RuntimeError("first attempt fails")
+    return "ok"
+
+
+@overseer.task(unique=True, backend="immediate")
+def unique_recursive(n):
+    CALLS.append(("recursive", n))
+    if n == 1 and sum(1 for c in CALLS if c[0] == "recursive") == 1:
+        unique_recursive.enqueue(1)  # same key while the first run is still active
+    return n
+
+
+@overseer.task(unique=True, backend="dummy")
+def unique_dummy(n):
+    return n

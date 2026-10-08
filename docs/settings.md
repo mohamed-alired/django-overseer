@@ -28,7 +28,8 @@ Delay before attempt *n* (n ≥ 2):
 | --- | --- | --- |
 | `OVERSEER_STALE_AFTER` | `3600` | a running attempt whose task has no `timeout` is abandoned after this many seconds |
 | `OVERSEER_WORKER_OFFLINE_AFTER` | `120` | an `overseer_worker` silent for this long, or for three heartbeat intervals if longer, is offline (and alerts, unless it stopped cleanly). Workers without heartbeats (plain `db_worker`) are never judged offline |
-| `OVERSEER_RESCUE_INTERVAL` | `30.0` | seconds between rescue passes in the scheduler loop |
+| `OVERSEER_SILENT_WORKER_AFTER` | `3600` | a worker without heartbeats (plain `db_worker`) that has not run a task for this long leaves the worker counts and shows as "silent"; such rows are pruned after a day |
+| `OVERSEER_RESCUE_INTERVAL` | `30.0` | seconds between rescue passes in the scheduler loop; a pass also marks waiting runs whose backend task disappeared as lost, and records results whose signal never arrived |
 
 ## Retention
 
@@ -57,7 +58,7 @@ Actions always require `overseer.manage_jobs` (retry, cancel, dismiss) or
 | --- | --- | --- |
 | `OVERSEER_ALERT_WINDOW_MINUTES` | `5` | window over which failure rate and waits are measured |
 | `OVERSEER_ALERT_FAILURE_RATE` | `0.25` | per-queue failure rate that fires `failure_rate` (needs 5+ finished runs) |
-| `OVERSEER_ALERT_WAIT_SECONDS` | `60` | a run waiting longer than this to start (picked up or not) fires `queue_wait`, and makes `/api/health/` return 503 |
+| `OVERSEER_ALERT_WAIT_SECONDS` | `60` | a run that waited longer than this to start, or is still waiting that long, fires `queue_wait`; a run still waiting that long makes `/api/health/` return 503 |
 | `OVERSEER_ALERT_QUEUE_DEPTH` | `1000` | more waiting runs than this fires `queue_depth` |
 | `OVERSEER_ALERT_COOLDOWN_MINUTES` | `15` | an alert key does not fire again within this time |
 | `OVERSEER_NOTIFIERS` | `[]` | dotted paths or callables; each receives the `Alert` |
@@ -86,6 +87,10 @@ scheduler and the web process each need to import them.
 
 - `overseer.E001`–`E003`: invalid `OVERSEER_DEFAULT_BACKOFF`, negative retries, or a
   `OVERSEER_PERMISSION` that is not `app_label.codename`.
+- `overseer.E004`/`E005`: a numeric setting that is not a number, or an `OVERSEER_HEALTH_TOKEN`
+  that is not a string of at least 16 characters.
+- `overseer.W002`: the database has no partial unique indexes (MySQL, MariaDB, Oracle), so
+  `unique=True` cannot be guaranteed there.
 - `overseer.W001`: a task with delayed retries (`backoff_base` above 0) uses a backend
   whose `supports_defer` is false, so backoff delays cannot be honoured and retries run
   immediately.

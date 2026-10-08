@@ -1,5 +1,48 @@
 # Changelog
 
+## [0.1.2] - 2026-10-08
+
+Fixes from a review of 0.1.1, two of them regressions introduced there. No new migration.
+
+### Regressions in 0.1.1
+- Metric rollups, and with them alert evaluation, failed on MySQL, MariaDB and Oracle
+  because the upsert they used is not available there. The rollup now falls back to a
+  plain insert on those databases, and CI runs the suite on MariaDB.
+- A `job_failed` receiver that raised rolled back the recording of the failure, leaving
+  the job "running" until rescue abandoned it an hour later. Receivers are now called
+  robustly and their errors logged.
+- Tasks that take no arguments could not be retried with `OVERSEER_RECORD_ARGS = False`.
+
+### Reliability
+- Waiting runs whose backend task disappeared (deleted row, restored database) are marked
+  lost by the rescue pass, which also records results whose signal never arrived. Health,
+  `queue_wait` and unique keys no longer stay stuck on them.
+- `unique=True` no longer breaks on backends that cannot look results up (the immediate
+  backend re-enqueueing its own key, the dummy backend after a restart): the key is simply
+  not enforced there, with a warning.
+- "Retry all" no longer gets stuck behind jobs it cannot retry; those do not use up the
+  per-click budget.
+- The failure-rate alert excludes cancelled runs, as the dashboard already did.
+- A schedule disabled by Overseer because it could not fire is enabled again once its
+  declaration is fixed. `overseer_sync_schedules --enable` re-enables declared schedules
+  that versions before 0.1.1 disabled without a marker.
+- Plain `db_worker` rows (a new random id per start, never stopped) leave the worker counts
+  once silent for `OVERSEER_SILENT_WORKER_AFTER` (new setting, an hour) and are pruned
+  after a day.
+- Cron is as fast as 0.1.0 again away from daylight-saving changes.
+
+### Dashboard and API
+- The job page heading refreshes with the rest of the page.
+- Cancelling a job whose backend alias was removed, a NUL byte in a filter on
+  PostgreSQL, and `OVERSEER_ALERT_WAIT_SECONDS = None` no longer give a 500.
+- The health token's `Bearer` scheme is case-insensitive; 401 responses carry
+  `WWW-Authenticate` and health responses `Cache-Control: no-store`.
+- The Metrics page window labels read like the other pages'.
+- New system checks: `E004`/`E005` for mistyped settings, `W002` where the database cannot
+  enforce unique tasks (MySQL, MariaDB, Oracle).
+- Documentation corrected where it promised columns the Queues, Tasks and Job pages do not
+  have, and `?minutes=` on pages that do not take it.
+
 ## [0.1.1] - 2026-10-08
 
 Bug fixes from a full review of 0.1.0. Run `python manage.py migrate` (migration 0002 adds

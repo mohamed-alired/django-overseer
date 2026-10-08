@@ -15,12 +15,15 @@ from django.tasks.base import (
     DEFAULT_TASK_PRIORITY,
     DEFAULT_TASK_QUEUE_NAME,
 )
+from django.tasks.exceptions import TaskResultDoesNotExist
 
 from . import conf, registry
 from .registry import TaskPolicy
 from .scheduling import registry as schedule_registry
 
 logger = logging.getLogger("overseer")
+
+NOT_ENFORCED = object()  # sentinel: the backend cannot hand an existing result back
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -62,7 +65,22 @@ class OverseerTask(DjangoTask):
                 status=JobStatus.FAILED, finished_at=timezone.now()
             )
             return None
-        return self.get_backend().get_result(run.result_id)
+        backend = self.get_backend()
+        if not backend.supports_get_result:
+            # The existing attempt cannot be handed back (an immediate backend running this
+            # very task, for instance), so the key cannot be honoured: enqueue normally.
+            logger.warning(
+                "Backend %r cannot look results up; unique=True is not enforced on it", self.backend
+            )
+            return NOT_ENFORCED
+        try:
+            return backend.get_result(run.result_id)
+        except TaskResultDoesNotExist:
+            # The backend lost the task behind the active run; it will never execute.
+            from .rescue import mark_lost
+
+            mark_lost(run)
+            return None
 
     def enqueue(self, *args, **kwargs):
         from django.db import IntegrityError, transaction
@@ -79,6 +97,8 @@ class OverseerTask(DjangoTask):
             return DjangoTask.enqueue(self, *args, **kwargs)
 
         result = self._existing_result(key)
+        if result is NOT_ENFORCED:
+            return DjangoTask.enqueue(self, *args, **kwargs)
         if result is not None:
             return result
         policy = registry.get_policy(self.module_path)
@@ -112,6 +132,8 @@ class OverseerTask(DjangoTask):
             except IntegrityError:
                 # Lost the race: another process holds this key now.
                 result = self._existing_result(key)
+                if result is NOT_ENFORCED:  # pragma: no cover
+                    return DjangoTask.enqueue(self, *args, **kwargs)
                 if result is not None:
                     return result
         raise RuntimeError(f"Could not reserve unique key {key!r}")  # pragma: no cover

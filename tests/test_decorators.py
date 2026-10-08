@@ -1,5 +1,6 @@
 import pytest
 from django.core.checks import run_checks
+from django.db import connection
 from django.tasks import Task
 
 import overseer
@@ -60,6 +61,10 @@ def test_lazy_exports():
         overseer.nope  # noqa: B018
 
 
+@pytest.mark.skipif(
+    not connection.features.supports_partial_indexes,
+    reason="Django and Overseer both warn about the unique constraint on this database",
+)
 def test_checks_clean_by_default():
     assert [c.id for c in run_checks()] == []
 

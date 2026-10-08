@@ -1,6 +1,6 @@
 """django-overseer: dashboard, retries and schedules for Django's Tasks framework."""
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 
 def __getattr__(name):

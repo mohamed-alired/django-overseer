@@ -5,7 +5,7 @@
 {% block content %}
 {% if can_manage_jobs and total %}
 <div class="panel"><div class="actions">
-  <form method="post" action="{% url 'overseer:failed-retry-all' %}" data-confirm="Retry every failed job?">{% csrf_token %}<button class="btn primary">Retry all</button></form>
+  <form method="post" action="{% url 'overseer:failed-retry-all' %}" data-confirm="Retry the failed jobs on this list (in batches)?">{% csrf_token %}<button class="btn primary">Retry all</button></form>
   <form method="post" action="{% url 'overseer:failed-dismiss-all' %}" data-confirm="Dismiss every failed job from this list?">{% csrf_token %}<button class="btn">Dismiss all</button></form>
 </div></div>
 {% endif %}

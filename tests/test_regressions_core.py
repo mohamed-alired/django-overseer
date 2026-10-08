@@ -2,6 +2,7 @@
 
 import pytest
 from asgiref.sync import async_to_sync
+from django.db import connection
 from django.tasks.signals import task_enqueued
 from django.utils import timezone
 from django_tasks_db.models import DBTaskResult
@@ -48,6 +49,10 @@ class TestUniqueTasksRetry:
         assert job.status == JobStatus.SUCCEEDED
         assert len(calls("unique")) == 2
 
+    @pytest.mark.skipif(
+        not connection.features.supports_partial_indexes,
+        reason="unique keys are only enforced with partial indexes",
+    )
     def test_manual_retry_refused_when_another_job_holds_the_key(self, worker):
         tasks.unique_by_args.enqueue("k@example.com")
         worker()

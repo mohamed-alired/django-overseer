@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import logging
 import math
 from collections import defaultdict
 from datetime import datetime, timedelta
 
-from django.db import transaction
+from django.db import IntegrityError, connection, transaction
 from django.db.models import Max, Q
 from django.utils import timezone
 
 from .models import MetricBucket, Run, RunStatus
+
+logger = logging.getLogger("overseer")
 
 BUCKET = timedelta(minutes=1)
 #: Buckets this far back are recomputed on every rollup, to absorb late finishes.
@@ -126,21 +129,32 @@ def rollup(since: datetime | None = None, until: datetime | None = None) -> int:
     if since >= until:
         return 0
     buckets = aggregate(since, until)
+    rows = [
+        MetricBucket(bucket_start=start, queue_name=queue, task_path=task, **agg.as_fields())
+        for (start, queue, task), agg in buckets.items()
+    ]
+    unique = ["bucket_start", "queue_name", "task_path"]
     with transaction.atomic():
         MetricBucket.objects.filter(bucket_start__gte=since, bucket_start__lt=until).delete()
-        rows = [
-            MetricBucket(bucket_start=start, queue_name=queue, task_path=task, **agg.as_fields())
-            for (start, queue, task), agg in buckets.items()
-        ]
-        # An upsert: two schedulers rolling up the same minute at once must not collide on
-        # the unique (bucket_start, queue_name, task_path) constraint.
-        MetricBucket.objects.bulk_create(
-            rows,
-            batch_size=500,
-            update_conflicts=True,
-            unique_fields=["bucket_start", "queue_name", "task_path"],
-            update_fields=METRIC_FIELDS,
-        )
+        if connection.features.supports_update_conflicts_with_target:
+            # An upsert: two schedulers rolling up the same minute at once must not collide
+            # on the unique (bucket_start, queue_name, task_path) constraint.
+            MetricBucket.objects.bulk_create(
+                rows,
+                batch_size=500,
+                update_conflicts=True,
+                unique_fields=unique,
+                update_fields=METRIC_FIELDS,
+            )
+        else:
+            # MySQL, MariaDB and Oracle cannot upsert on a target: insert, and if another
+            # scheduler wrote the same minutes first, let its rows stand.
+            try:
+                with transaction.atomic():
+                    MetricBucket.objects.bulk_create(rows, batch_size=500)
+            except IntegrityError:
+                logger.info("Metric rollup for %s-%s was written by another process", since, until)
+                return 0
     return len(rows)
 
 

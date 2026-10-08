@@ -26,11 +26,12 @@ SPEC_FIELDS = (
 )
 
 
-def sync_schedules(now=None) -> dict[str, list[str]]:
+def sync_schedules(now=None, *, enable_all: bool = False) -> dict[str, list[str]]:
     """Create, update or disable DB rows so they match ``overseer.schedule`` declarations.
 
     Rows created by hand (``declared_in_code=False``) are never touched, even when a
-    declaration has the same name (reported under ``conflicts``). A row whose declaration
+    declaration has the same name (reported under ``conflicts``). With ``enable_all`` every
+    declared row that is disabled is enabled again, whoever disabled it. A row whose declaration
     disappeared from the code is disabled, not deleted, so its history stays; it is enabled
     again when the declaration comes back (a schedule paused by a person stays paused).
     When no declarations are loaded at all, nothing is disabled: that is far more likely a
@@ -66,7 +67,12 @@ def sync_schedules(now=None) -> dict[str, list[str]]:
                     report["conflicts"].append(name)
                     continue
                 changed = [f for f in SPEC_FIELDS if getattr(row, f) != values[f]]
-                revived = row.missing_from_code
+                # Disabled by Overseer itself (declaration gone, or it could never fire) and
+                # now declared again and valid: enable it. ``enable_all`` also covers rows
+                # disabled before 0.1.1, when no marker was kept.
+                revived = not row.enabled and (
+                    row.missing_from_code or row.last_error.startswith("Disabled:") or enable_all
+                )
                 if not changed and not revived and row.next_run_at is not None:
                     report["unchanged"].append(name)
                     continue

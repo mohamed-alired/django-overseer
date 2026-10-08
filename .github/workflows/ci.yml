@@ -97,6 +97,36 @@ jobs:
       - name: Whole suite on PostgreSQL (unit, concurrency, integration, E2E, perf)
         run: pytest --ds=tests.settings_postgres
 
+  test-mariadb:
+    # No partial indexes and no upsert-on-target: the portability fallbacks run here.
+    runs-on: ubuntu-latest
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: overseer
+          MARIADB_DATABASE: overseer
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      MYSQL_HOST: 127.0.0.1
+      MYSQL_USER: root
+      MYSQL_PASSWORD: overseer
+      MYSQL_DATABASE: overseer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test]" "django~=6.1.0" mysqlclient
+      - name: Whole suite on MariaDB (unit, integration, E2E, perf)
+        run: pytest --ds=tests.settings_mysql
+
   build:
     runs-on: ubuntu-latest
     steps:

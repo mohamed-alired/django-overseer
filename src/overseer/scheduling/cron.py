@@ -127,24 +127,9 @@ class Cron:
             return (early.astimezone(UTC), late.astimezone(UTC))
         return (early.astimezone(UTC),)
 
-    def next_after(self, after: datetime, tz: str | None = None) -> datetime:
-        """The first matching instant strictly after ``after`` (aware), evaluated in ``tz``.
-
-        Wall-clock order and real-time order disagree around daylight-saving changes, so
-        the search starts a little before ``after`` in wall-clock time, resolves every
-        matching minute to real instants and keeps the earliest one after ``after``.
-        """
-        if after.tzinfo is None:
-            raise CronError("next_after() needs an aware datetime")
-        zone = zoneinfo.ZoneInfo(tz) if tz else after.tzinfo
-        wall = (
-            (after - DST_MARGIN)
-            .astimezone(zone)
-            .replace(tzinfo=None, second=0, microsecond=0, fold=0)
-        )
-        limit = wall + timedelta(days=366 * 5)
-        best = stop = None
-        while wall < limit and (stop is None or wall <= stop):
+    def _first_match(self, wall: datetime, limit: datetime) -> datetime | None:
+        """The first matching wall-clock minute at or after ``wall`` (naive), below ``limit``."""
+        while wall < limit:
             if wall.month not in self.months:
                 wall = (wall.replace(day=1, hour=0, minute=0) + timedelta(days=32)).replace(day=1)
                 continue
@@ -154,12 +139,57 @@ class Cron:
             if wall.hour not in self.hours:
                 wall = (wall + timedelta(hours=1)).replace(minute=0)
                 continue
-            if wall.minute in self.minutes:
-                for instant in self._instants(wall, zone):
-                    if instant > after and (best is None or instant < best):
-                        best = instant
-                if best is not None and stop is None:
-                    stop = wall + DST_MARGIN
+            if wall.minute not in self.minutes:
+                wall += timedelta(minutes=1)
+                continue
+            return wall
+        return None
+
+    @staticmethod
+    def _near_transition(instant: datetime, zone) -> bool:
+        """Whether the UTC offset of ``zone`` changes within ``DST_MARGIN`` of ``instant``."""
+        offsets = {
+            (instant + delta).astimezone(zone).utcoffset()
+            for delta in (-DST_MARGIN, timedelta(0), DST_MARGIN)
+        }
+        return len(offsets) > 1
+
+    def next_after(self, after: datetime, tz: str | None = None) -> datetime:
+        """The first matching instant strictly after ``after`` (aware), evaluated in ``tz``.
+
+        Away from daylight-saving changes, wall-clock order is real-time order and the first
+        matching minute is the answer. Within a few hours of a change the two orders
+        disagree, so the search starts a little before ``after``, resolves every matching
+        minute to real instants and keeps the earliest one after ``after``.
+        """
+        if after.tzinfo is None:
+            raise CronError("next_after() needs an aware datetime")
+        zone = zoneinfo.ZoneInfo(tz) if tz else after.tzinfo
+        after_utc = after.astimezone(UTC)
+        start = after.astimezone(zone).replace(tzinfo=None, second=0, microsecond=0, fold=0)
+        limit = start + timedelta(days=366 * 5)
+        if not self._near_transition(after_utc, zone):
+            wall = self._first_match(start + timedelta(minutes=1), limit)
+            if wall is None:
+                raise CronError(f"{self.expression!r} never fires within five years")
+            candidates = [i for i in self._instants(wall, zone) if i > after_utc]
+            if candidates and not self._near_transition(candidates[0], zone):
+                return min(candidates).astimezone(after.tzinfo)
+        wall = (
+            (after_utc - DST_MARGIN)
+            .astimezone(zone)
+            .replace(tzinfo=None, second=0, microsecond=0, fold=0)
+        )
+        best = stop = None
+        while True:
+            wall = self._first_match(wall, limit)
+            if wall is None or (stop is not None and wall > stop):
+                break
+            for instant in self._instants(wall, zone):
+                if instant > after_utc and (best is None or instant < best):
+                    best = instant
+            if best is not None and stop is None:
+                stop = wall + DST_MARGIN
             wall += timedelta(minutes=1)
         if best is None:
             raise CronError(f"{self.expression!r} never fires within five years")

@@ -28,6 +28,13 @@ WINDOWS = (15, 60, 360, 1440)
 WINDOW_LABELS = ((15, "15 minutes"), (60, "hour"), (360, "6 hours"), (1440, "24 hours"))
 
 
+def text_param(params, name: str, max_length: int = 255) -> str | None:
+    """A free-text query parameter, or None when empty. NUL bytes are dropped: PostgreSQL
+    rejects them with an error, and no legitimate value contains one."""
+    value = (params.get(name) or "").replace("\x00", "").strip()
+    return value[:max_length] or None
+
+
 def user_can_view(user) -> bool:
     if not user.is_authenticated or not user.is_staff:
         return False
@@ -131,11 +138,11 @@ class JobsView(Page):
         ctx = super().get_context_data(**kwargs)
         g = self.request.GET
         filters = {
-            "status": g.get("status") or None,
-            "queue_name": g.get("queue") or None,
-            "task_path": g.get("task") or None,
-            "worker_id": g.get("worker") or None,
-            "search": g.get("q") or None,
+            "status": text_param(g, "status"),
+            "queue_name": text_param(g, "queue"),
+            "task_path": text_param(g, "task"),
+            "worker_id": text_param(g, "worker"),
+            "search": text_param(g, "q"),
         }
         qs = stats.job_queryset(**filters).select_related("schedule")
         page = Paginator(qs, self.per_page).get_page(g.get("page"))
@@ -209,7 +216,7 @@ class MetricsView(Page):
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         minutes = self.window(60)
-        queue = self.request.GET.get("queue") or None
+        queue = text_param(self.request.GET, "queue")
         points = stats.timeseries(minutes, queue_name=queue)
         ctx.update(
             minutes=minutes,
@@ -293,6 +300,10 @@ class JobCancelView(Action):
         except AdapterUnsupported as exc:
             messages.error(request, str(exc))
             return self.back("overseer:jobs")
+        except Exception as exc:  # the backend alias is gone from TASKS, for instance
+            logger.exception("Cancelling job %s failed", job.pk)
+            messages.error(request, f"Could not cancel: {type(exc).__name__}: {exc}")
+            return self.back("overseer:jobs")
         if removed:
             now = timezone.now()
             Run.objects.filter(pk=run.pk).update(status=RunStatus.CANCELLED, finished_at=now)
@@ -324,7 +335,11 @@ class FailedRetryAllView(Action):
         failed = Job.objects.filter(status=JobStatus.FAILED, dismissed=False)
         total = failed.count()
         retried = skipped = 0
-        for job in failed.order_by("created_at")[:limit]:
+        # Jobs that cannot be retried do not use up the budget, so a batch of unretryable
+        # jobs at the head of the list never hides the ones behind it.
+        for job in failed.order_by("created_at").iterator(chunk_size=200):
+            if retried >= limit:
+                break
             try:
                 retry.retry_job(job)
             except Exception as exc:
@@ -333,11 +348,12 @@ class FailedRetryAllView(Action):
                     logger.exception("Retrying job %s failed", job.pk)
             else:
                 retried += 1
+        remaining = total - retried - skipped
         message = f"Retried {retried} job(s)."
         if skipped:
             message += f" {skipped} could not be retried."
-        if total > limit:
-            message += f" {total - limit} more remain; click again to continue."
+        if remaining > 0:
+            message += f" {remaining} more remain; click again to continue."
         (messages.success if retried or not skipped else messages.error)(request, message)
         return self.back("overseer:failed")
 

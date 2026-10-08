@@ -12,17 +12,16 @@ from django.utils.crypto import constant_time_compare
 
 from . import conf, stats
 from .models import Alert, Job, Schedule
-from .views import WINDOWS, user_can_view
+from .views import WINDOWS, text_param, user_can_view
 
 
 def _bearer_token_ok(request) -> bool:
     token = conf.get_setting("OVERSEER_HEALTH_TOKEN")
-    header = request.headers.get("Authorization", "")
-    return (
-        bool(token)
-        and header.startswith("Bearer ")
-        and constant_time_compare(header.removeprefix("Bearer ").strip(), token)
-    )
+    if not token or not isinstance(token, str):
+        return False
+    scheme, _, credentials = request.headers.get("Authorization", "").strip().partition(" ")
+    # RFC 7235: the scheme is case-insensitive.
+    return scheme.lower() == "bearer" and constant_time_compare(credentials.strip(), token)
 
 
 def access_required(view=None, *, allow_token=False):
@@ -33,7 +32,10 @@ def access_required(view=None, *, allow_token=False):
         def wrapper(request, *args, **kwargs):
             if not user_can_view(request.user) and not (allow_token and _bearer_token_ok(request)):
                 status = 401 if not request.user.is_authenticated else 403
-                return JsonResponse({"detail": "Overseer access required."}, status=status)
+                response = JsonResponse({"detail": "Overseer access required."}, status=status)
+                if allow_token and status == 401:
+                    response["WWW-Authenticate"] = 'Bearer realm="overseer"'
+                return response
             return view(request, *args, **kwargs)
 
         return wrapper
@@ -126,11 +128,11 @@ def tasks(request):
 def jobs(request):
     g = request.GET
     qs = stats.job_queryset(
-        status=g.get("status") or None,
-        queue_name=g.get("queue") or None,
-        task_path=g.get("task") or None,
-        worker_id=g.get("worker") or None,
-        search=g.get("q") or None,
+        status=text_param(g, "status"),
+        queue_name=text_param(g, "queue"),
+        task_path=text_param(g, "task"),
+        worker_id=text_param(g, "worker"),
+        search=text_param(g, "q"),
     )
     per_page = _int_param(request, "per_page", 50, 1, 200)
     page = Paginator(qs, per_page).get_page(g.get("page"))
@@ -196,7 +198,7 @@ def schedules(request):
 @access_required
 def metrics(request):
     minutes = _minutes(request, 60)
-    queue = request.GET.get("queue") or None
+    queue = text_param(request.GET, "queue")
     return JsonResponse(
         {"minutes": minutes, "queue": queue, "points": stats.timeseries(minutes, queue_name=queue)}
     )
@@ -234,7 +236,7 @@ def health(request):
     ``Authorization: Bearer <OVERSEER_HEALTH_TOKEN>`` when that setting is set.
     """
     data = stats.overview(_minutes(request, 15))
-    max_wait = conf.get_setting("OVERSEER_ALERT_WAIT_SECONDS")
+    max_wait = float(conf.get_setting("OVERSEER_ALERT_WAIT_SECONDS") or 0)
     ok = data["oldest_wait_seconds"] <= max_wait
     payload = {
         "ok": ok,
@@ -247,4 +249,6 @@ def health(request):
         "failed_jobs_open": data["failed_jobs_open"],
         "open_alerts": data["open_alerts"],
     }
-    return JsonResponse(payload, status=200 if ok else 503)
+    response = JsonResponse(payload, status=200 if ok else 503)
+    response["Cache-Control"] = "no-store"
+    return response

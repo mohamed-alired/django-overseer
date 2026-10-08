@@ -1,6 +1,6 @@
 {% extends "overseer/base.html" %}{% load overseer_extras %}
 {% block title %}{{ job.task_name }} · Overseer{% endblock %}
-{% block heading %}{{ job.task_name }} <span class="badge {{ job.status }}">{{ job.get_status_display }}</span>{% endblock %}
+{% block heading %}{{ job.task_name }} <span data-refresh-id="job-status" data-refresh-every="{{ refresh_seconds }}"><span class="badge {{ job.status }}">{{ job.get_status_display }}</span></span>{% endblock %}
 {% block meta %}<span class="mono">{{ job.pk }}</span>{% endblock %}
 {% block content %}
 <div data-refresh-id="job" data-refresh-every="{{ refresh_seconds }}">
