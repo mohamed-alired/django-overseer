@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+- A job page with a long traceback line was wider than the window and scrolled sideways;
+  tracebacks now wrap, and wide tables scroll inside their panel.
+- Screenshots in the README.
+
 ## [0.1.4] - 2026-10-08
 
 - `overseer_worker --reload` (the default when `DEBUG` is on) recorded no stop when it got

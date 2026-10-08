@@ -11,14 +11,14 @@
 body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 var(--font); }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
-.ov-shell { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }
+.ov-shell { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 100vh; }
 .ov-nav { background: var(--panel); border-right: 1px solid var(--line); padding: 20px 14px; }
 .ov-nav .brand { font-weight: 700; font-size: 16px; margin: 0 8px 18px; display: flex; align-items: center; gap: 8px; }
 .ov-nav .brand .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--ok); }
 .ov-nav a.item { display: block; padding: 8px 10px; border-radius: 8px; color: var(--ink); }
 .ov-nav a.item.active, .ov-nav a.item:hover { background: var(--bg); text-decoration: none; }
 .ov-nav .count { float: right; color: var(--muted); font-variant-numeric: tabular-nums; }
-.ov-main { padding: 24px 28px; max-width: 1400px; }
+.ov-main { padding: 24px 28px; max-width: 1400px; min-width: 0; }
 .ov-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 18px; flex-wrap: wrap; }
 .ov-head h1 { margin: 0; font-size: 20px; }
 .ov-head .meta { color: var(--muted); font-size: 12px; }
@@ -27,7 +27,7 @@ a:hover { text-decoration: underline; }
 .card .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
 .card .value { font-size: 26px; font-weight: 600; margin-top: 4px; font-variant-numeric: tabular-nums; }
 .card .sub { color: var(--muted); font-size: 12px; }
-.panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; margin-bottom: 18px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; margin-bottom: 18px; overflow-x: auto; }
 .panel h2 { margin: 0 0 12px; font-size: 15px; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
@@ -42,7 +42,7 @@ tr:last-child td { border-bottom: 0; }
 .badge.CANCELLED { background: #e5e7eb; color: #374151; }
 .badge.on { background: #dcfce7; color: #166534; } .badge.off { background: #e5e7eb; color: #374151; }
 code, .mono { font-family: var(--mono); font-size: 12px; }
-pre { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 12px; overflow: auto; font-size: 12px; max-height: 420px; }
+pre { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 12px; overflow: auto; font-size: 12px; max-height: 420px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
 .filters select, .filters input, .btn { font: inherit; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); }
 .btn { cursor: pointer; }
@@ -64,4 +64,4 @@ pre { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; 
 .msg { padding: 10px 14px; border-radius: 8px; margin-bottom: 12px; background: #dcfce7; color: #166534; }
 .msg.error { background: #fee2e2; color: #991b1b; }
 .empty { color: var(--muted); padding: 24px; text-align: center; }
-@media (max-width: 800px) { .ov-shell { grid-template-columns: 1fr; } .ov-nav { border-right: 0; border-bottom: 1px solid var(--line); } .ov-main { padding: 16px; } }
+@media (max-width: 800px) { .ov-shell { grid-template-columns: minmax(0, 1fr); } .ov-nav { border-right: 0; border-bottom: 1px solid var(--line); } .ov-main { padding: 16px; } }

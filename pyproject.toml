@@ -54,6 +54,7 @@ packages = ["src/overseer"]
 
 [tool.hatch.build.targets.sdist]
 include = ["src/overseer", "tests", "docs", "README.md", "CHANGELOG.md", "LICENSE", "pyproject.toml"]
+exclude = ["docs/images"]
 
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "tests.settings"

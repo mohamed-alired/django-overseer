@@ -8,6 +8,8 @@ no alarm when a queue backs up. Overseer adds the operational layer that every o
 ecosystem takes for granted (Sidekiq's web UI, Celery's Flower, Oban's dashboard) without
 adding a broker, a JavaScript build or a second framework.
 
+![The Overseer overview page: throughput, failure rate, runtime, waiting and running counts, runs per minute and per-queue figures](https://raw.githubusercontent.com/mohamed-alired/django-overseer/main/docs/images/overview.png)
+
 - **Dashboard**: overview, queues, tasks, jobs with filters and search, job detail with the
   full attempt chain and tracebacks, failed jobs with retry / dismiss, schedules, workers,
   per-minute metrics and alerts. Plain Django views and templates, auto-refreshing, no
@@ -34,6 +36,25 @@ adding a broker, a JavaScript build or a second framework.
 Everything is recorded through the three `django.tasks` signals, so Overseer works with
 **any** task backend. Cancelling pending tasks and resetting stuck ones needs backend
 knowledge; an adapter ships for `django-tasks-db` and the interface is open for others.
+
+
+### Screenshots
+
+The dashboard is its own set of pages at `/overseer/`, separate from the Django admin.
+These come from the [example project](https://github.com/mohamed-alired/django-overseer/tree/main/examples/demo).
+
+**A job's attempts.** A card charge that succeeded on its fifth attempt after four
+timeouts, retried with exponential backoff; each failed attempt keeps its traceback:
+
+![Job detail page for a charge_card job on attempt 5 of 5, with the first failed attempt and its traceback](https://raw.githubusercontent.com/mohamed-alired/django-overseer/main/docs/images/job.png)
+
+**Failed jobs**, with retry and dismiss for each job or for all of them:
+
+![Failed jobs page with Retry all, Dismiss all and per-job Retry and Dismiss buttons](https://raw.githubusercontent.com/mohamed-alired/django-overseer/main/docs/images/failed.png)
+
+**Schedules**, with pause and run-now:
+
+![Schedules page listing cron and interval schedules with next run, last run, Pause and Run now](https://raw.githubusercontent.com/mohamed-alired/django-overseer/main/docs/images/schedules.png)
 
 ## Requirements
 
@@ -94,7 +115,7 @@ Open `/overseer/` as a staff user with the `overseer.view_dashboard` permission 
 always have it). `overseer.manage_jobs` allows retry / cancel / dismiss and
 `overseer.manage_schedules` allows pausing and triggering schedules.
 
-To try it first, [`examples/demo`](examples/demo) is a small shop project with example
+To try it first, [`examples/demo`](https://github.com/mohamed-alired/django-overseer/tree/main/examples/demo) is a small shop project with example
 tasks, schedules and an admin login.
 
 ## Declaring tasks
