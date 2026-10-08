@@ -27,14 +27,14 @@ Delay before attempt *n* (n ≥ 2):
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `OVERSEER_STALE_AFTER` | `3600` | a running attempt whose task has no `timeout` is abandoned after this many seconds |
-| `OVERSEER_WORKER_OFFLINE_AFTER` | `120` | a worker not seen for this long is offline (and alerts, unless it stopped cleanly) |
+| `OVERSEER_WORKER_OFFLINE_AFTER` | `120` | an `overseer_worker` silent for this long, or for three heartbeat intervals if longer, is offline (and alerts, unless it stopped cleanly). Workers without heartbeats (plain `db_worker`) are never judged offline |
 | `OVERSEER_RESCUE_INTERVAL` | `30.0` | seconds between rescue passes in the scheduler loop |
 
 ## Retention
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `OVERSEER_RETENTION_DAYS` | `14` | `overseer_prune` deletes finished jobs (with their runs), alerts and silent workers older than this |
+| `OVERSEER_RETENTION_DAYS` | `14` | `overseer_prune` deletes finished jobs (with their runs), resolved alerts and silent workers older than this; `0` is allowed |
 | `OVERSEER_METRICS_RETENTION_DAYS` | `30` | metric buckets older than this are deleted |
 | `OVERSEER_RECORD_ARGS` | `True` | store task args and kwargs on the `Job` |
 | `OVERSEER_MAX_TRACEBACK_CHARS` | `20000` | tracebacks are truncated to this length |
@@ -45,6 +45,8 @@ Delay before attempt *n* (n ≥ 2):
 | --- | --- | --- |
 | `OVERSEER_PERMISSION` | `"overseer.view_dashboard"` | permission required in addition to `is_staff`; `None` means any staff user |
 | `OVERSEER_REFRESH_SECONDS` | `5` | panel auto-refresh interval; `0` disables |
+| `OVERSEER_HEALTH_TOKEN` | `None` | when set, `/api/health/` also accepts `Authorization: Bearer <token>` (that endpoint only) |
+| `OVERSEER_RETRY_ALL_LIMIT` | `200` | failed jobs retried per "Retry all" click |
 
 Actions always require `overseer.manage_jobs` (retry, cancel, dismiss) or
 `overseer.manage_schedules` (pause, resume, run now, sync).
@@ -55,7 +57,7 @@ Actions always require `overseer.manage_jobs` (retry, cancel, dismiss) or
 | --- | --- | --- |
 | `OVERSEER_ALERT_WINDOW_MINUTES` | `5` | window over which failure rate and waits are measured |
 | `OVERSEER_ALERT_FAILURE_RATE` | `0.25` | per-queue failure rate that fires `failure_rate` (needs 5+ finished runs) |
-| `OVERSEER_ALERT_WAIT_SECONDS` | `60` | oldest waiting run older than this fires `queue_wait` |
+| `OVERSEER_ALERT_WAIT_SECONDS` | `60` | a run waiting longer than this to start (picked up or not) fires `queue_wait`, and makes `/api/health/` return 503 |
 | `OVERSEER_ALERT_QUEUE_DEPTH` | `1000` | more waiting runs than this fires `queue_depth` |
 | `OVERSEER_ALERT_COOLDOWN_MINUTES` | `15` | an alert key does not fire again within this time |
 | `OVERSEER_NOTIFIERS` | `[]` | dotted paths or callables; each receives the `Alert` |
@@ -84,5 +86,6 @@ scheduler and the web process each need to import them.
 
 - `overseer.E001`–`E003`: invalid `OVERSEER_DEFAULT_BACKOFF`, negative retries, or a
   `OVERSEER_PERMISSION` that is not `app_label.codename`.
-- `overseer.W001`: a task with retries uses a backend whose `supports_defer` is false, so
-  backoff delays cannot be honoured and retries run immediately.
+- `overseer.W001`: a task with delayed retries (`backoff_base` above 0) uses a backend
+  whose `supports_defer` is false, so backoff delays cannot be honoured and retries run
+  immediately.

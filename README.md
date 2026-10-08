@@ -17,7 +17,8 @@ adding a broker, a JavaScript build or a second framework.
   Retries are real re-enqueues through `django.tasks`, deferred with `run_after` on backends
   that support it.
 - **Unique tasks**: `unique=True` (or a key callable) collapses identical pending enqueues,
-  enforced by a database constraint so concurrent enqueues cannot both win.
+  through `enqueue()` and `aenqueue()` alike, enforced by a database constraint so
+  concurrent enqueues cannot both win. A unique task's retries keep its key.
 - **Schedules**: `@overseer.schedule("*/5 * * * *")` or `every=300`, synced into the database,
   pausable and triggerable from the dashboard, with a scheduler that is safe to run on
   several hosts at once (`SELECT ... FOR UPDATE SKIP LOCKED`).
@@ -154,14 +155,29 @@ runs, or what the backend returns.
 `overseer.schedule` registers a declaration. `overseer_scheduler` (or `python manage.py
 overseer_sync_schedules`) writes it to the `Schedule` table, from which the dashboard can
 pause, resume or trigger it. Rows created in the dashboard or admin, with
-`declared_in_code=False`, are never touched by sync. A declaration removed from the code
-disables its row rather than deleting it, so its history stays.
+`declared_in_code=False`, are never touched by sync, even when a declaration has the same
+name. A declaration removed from the code disables its row rather than deleting it, so its
+history stays, and the row is enabled again if the declaration comes back. A schedule you
+paused stays paused. Declarations are validated when they are imported: a bad cron
+expression or timezone fails at startup, not at 3 a.m.
+
+A schedule that can never fire (an impossible date such as `0 0 31 2 *`, an unknown
+timezone, a row with neither cron nor interval) is disabled by the scheduler with the reason
+shown on the Schedules page; it never blocks the other schedules. An enqueue that fails
+(the task no longer imports, for example) is shown there too and retried at the next run.
 
 Cron expressions are the standard five fields with ranges, steps, lists, month and weekday
 names, `@hourly`-style aliases and the usual "day-of-month OR day-of-week" rule. The
 expression is evaluated in the schedule's `timezone`, else `OVERSEER_SCHEDULER_TIMEZONE`,
 else `TIME_ZONE`. A schedule that was missed while no scheduler was running fires once and
 continues from now; missed occurrences are not replayed.
+
+Daylight-saving changes follow vixie-cron: in the repeated autumn hour, schedules whose
+hour field is `*` keep firing by real time, while schedules pinned to hours (`30 1 * * *`,
+`0 */2 * * *`) fire once. A time that does not exist in the spring
+(`30 2 * * *` in New York on the changeover day) fires at the same offset past the gap. A
+day field starting with `*`, including `*/2`, counts as unrestricted for the
+day-of-month-or-day-of-week rule.
 
 The scheduler loop also runs the rescue every `OVERSEER_RESCUE_INTERVAL` seconds and the
 metrics rollup and alert evaluation every `OVERSEER_MAINTENANCE_INTERVAL` seconds. Run
@@ -178,11 +194,13 @@ once.
 | `overseer_rescue` | one-off pass over running attempts that exceeded their timeout |
 | `overseer_rollup [--since ISO]` | recompute per-minute metric buckets |
 | `overseer_alerts` | one-off alert evaluation and notification |
-| `overseer_prune [--days N] [--metrics-days N]` | delete finished jobs, runs, alerts, metric buckets and silent workers older than the retention |
+| `overseer_prune [--days N] [--metrics-days N]` | delete finished jobs, runs, resolved alerts, metric buckets and silent workers older than the retention (`--days 0` means everything finished) |
 
-If you run `db_worker` directly instead of `overseer_worker`, everything still works: the
-worker shows up in the dashboard from the task signals, only the heartbeat and the host /
-pid details are missing.
+If you run `db_worker` directly instead of `overseer_worker`, tasks, retries, schedules and
+the dashboard all work: the worker shows up from the task signals. What you lose is
+liveness. A plain `db_worker` is only seen when it runs a task and never reports a clean
+stop, so the dashboard shows it as "no heartbeat" and the `worker_offline` alert ignores
+it. Use `overseer_worker` when you want to know a worker died.
 
 ## Dashboard
 
@@ -195,14 +213,22 @@ pid details are missing.
 | Job | arguments, policy, every attempt with timing, worker, exception and traceback, return value; retry / cancel / dismiss |
 | Failed | open failures with the last error; retry all / dismiss all |
 | Schedules | next and last run, run count, pause / resume / run now / sync |
-| Workers | host, pid, queues, last heartbeat, current run, counters; offline after `OVERSEER_WORKER_OFFLINE_AFTER` |
+| Workers | host, pid, queues, last heartbeat, current run, counters; a heartbeat worker is offline after `OVERSEER_WORKER_OFFLINE_AFTER` or three missed beats, whichever is longer |
 | Metrics | per-minute runs and p95 runtime for the last 15 minutes to 24 hours, per queue |
 | Alerts | open and resolved alerts |
 
 Every page accepts `?minutes=15|60|360|1440`. Panels refresh every
 `OVERSEER_REFRESH_SECONDS` seconds (there is a pause button). The same data is available as
 JSON under `/overseer/api/...` for the logged-in user, plus `/overseer/api/health/`, which
-returns HTTP 503 when tasks are waiting and no worker is online.
+returns HTTP 503 when a ready task has waited longer than `OVERSEER_ALERT_WAIT_SECONDS`,
+that is, when tasks are not being picked up, whatever kind of worker you run. Set
+`OVERSEER_HEALTH_TOKEN` to let an uptime checker call it without a session:
+
+```bash
+curl -H "Authorization: Bearer $OVERSEER_HEALTH_TOKEN" https://example.com/overseer/api/health/
+```
+
+The token opens the health endpoint only.
 
 ## Alerts
 
@@ -212,9 +238,9 @@ returns HTTP 503 when tasks are waiting and no worker is online.
 | Kind | Fires when |
 | --- | --- |
 | `failure_rate` | a queue's failure rate exceeds `OVERSEER_ALERT_FAILURE_RATE` (after at least 5 finished runs) |
-| `queue_wait` | the oldest waiting run has waited more than `OVERSEER_ALERT_WAIT_SECONDS` |
+| `queue_wait` | a run has waited more than `OVERSEER_ALERT_WAIT_SECONDS` to start, counting runs no worker has picked up yet |
 | `queue_depth` | more than `OVERSEER_ALERT_QUEUE_DEPTH` runs are waiting |
-| `worker_offline` | a worker that did not stop cleanly has not been seen for `OVERSEER_WORKER_OFFLINE_AFTER` seconds |
+| `worker_offline` | an `overseer_worker` that did not stop cleanly has not sent a heartbeat for `OVERSEER_WORKER_OFFLINE_AFTER` seconds (or three heartbeat intervals, if longer) |
 
 An alert fires once, then not again for `OVERSEER_ALERT_COOLDOWN_MINUTES`, and resolves
 itself when the condition clears. Notifications go to `OVERSEER_ALERT_EMAILS` (or `ADMINS` when that is empty),
@@ -241,6 +267,8 @@ OVERSEER_RECORD_ARGS = True            # False to keep task arguments out of the
 OVERSEER_MAX_TRACEBACK_CHARS = 20_000
 OVERSEER_PERMISSION = "overseer.view_dashboard"   # None: any staff user
 OVERSEER_REFRESH_SECONDS = 5
+OVERSEER_HEALTH_TOKEN = None           # lets uptime checks call /api/health/ with a Bearer token
+OVERSEER_RETRY_ALL_LIMIT = 200         # failed jobs retried per "Retry all" click
 OVERSEER_ALERT_WINDOW_MINUTES = 5
 OVERSEER_ALERT_FAILURE_RATE = 0.25
 OVERSEER_ALERT_WAIT_SECONDS = 60
@@ -257,8 +285,9 @@ OVERSEER_AUTODISCOVER = True           # import <app>.tasks for every installed 
 OVERSEER_TASK_MODULES = []             # extra modules to import at startup
 ```
 
-`python manage.py check` warns when a task declares retries on a backend that cannot defer
-(`supports_defer` is false): retries then run immediately instead of after the backoff.
+`python manage.py check` warns when a task declares delayed retries on a backend that cannot
+defer (`supports_defer` is false): retries then run immediately instead of after the
+backoff.
 
 ## How it works
 
@@ -275,14 +304,18 @@ immediately. Recorders never raise: a bug in Overseer cannot break your worker.
 - Put the dashboard behind your usual staff authentication; it is a normal Django app under
   your `LOGIN_URL`.
 - Set `OVERSEER_RECORD_ARGS = False` if task arguments may contain secrets or personal
-  data; tracebacks are still stored, capped at `OVERSEER_MAX_TRACEBACK_CHARS`.
+  data; tracebacks are still stored, capped at `OVERSEER_MAX_TRACEBACK_CHARS`. Retries
+  then take the arguments from the backend's own copy of the failed attempt, so a manual
+  retry is no longer possible once the backend has deleted that row.
 - On SQLite with several processes (workers, the scheduler, the web app) writing to one
   file, configure the database as Django recommends for concurrent writers:
   `"OPTIONS": {"transaction_mode": "IMMEDIATE", "timeout": 20, "init_command": "PRAGMA
   journal_mode=WAL;"}`. Without it a writer that already read in the same transaction can
   fail with "database is locked" instead of waiting.
-- `ENQUEUE_ON_COMMIT` is honoured: a task enqueued inside a transaction is recorded when the
-  transaction commits, and never if it rolls back.
+- Recording happens in the same database transaction as the enqueue: with
+  `django-tasks-db`, a task enqueued inside a transaction that rolls back leaves neither a
+  backend row nor an Overseer job. A backend that runs tasks elsewhere (the immediate
+  backend runs them inline) has done its work by then, and only the record is rolled back.
 
 ## Development
 

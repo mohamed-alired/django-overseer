@@ -73,7 +73,6 @@ TASKS = {
     "default": {
         "BACKEND": "django_tasks_db.backend.DatabaseBackend",
         "QUEUES": ["default", "emails", "reports"],
-        "ENQUEUE_ON_COMMIT": False,
     },
     "immediate": {"BACKEND": "django.tasks.backends.immediate.ImmediateBackend"},
     "dummy": {"BACKEND": "django.tasks.backends.dummy.DummyBackend"},

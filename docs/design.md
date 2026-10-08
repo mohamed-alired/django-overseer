@@ -34,17 +34,26 @@ gets an `IntegrityError` and returns the winner's result instead of enqueueing t
   the job `SUCCEEDED` or hands it to the retry logic.
 
 The enqueue context is a `contextvars.ContextVar` set by whoever enqueues with extra
-knowledge (`enqueue_retry`, `enqueue_schedule`, `OverseerTask.enqueue`). It survives
-`ENQUEUE_ON_COMMIT` because the signal still fires in the enqueuing thread.
+knowledge (`enqueue_retry`, `enqueue_schedule`, `OverseerTask.enqueue`). Every backend sends
+`task_enqueued` synchronously from `enqueue()`, so the context is still set when the
+recorder reads it. The recorder marks it consumed: a context describes exactly one enqueue,
+so tasks enqueued later in the same scope, for example by a task body that the immediate
+backend runs inline, are recorded as jobs of their own.
+
+Each recorder runs in a savepoint, so a database error inside Overseer cannot break a
+transaction the caller has open.
 
 Recorders are wrapped so that any exception is logged with the result id and swallowed.
 
 ## Retries
 
 Retry decisions are made in the `task_finished` receiver, inside the worker. The next
-attempt is a real `task.using(run_after=...).enqueue(*args, **kwargs)` with the original
-arguments stored on the job, so it goes through the backend like any other task and is
-visible immediately, with no polling process in between. The job is marked `PENDING`
+attempt is a real `Task.enqueue` of `task.using(run_after=...)`, so it goes through the
+backend like any other task and is visible immediately, with no polling process in between.
+It deliberately bypasses `OverseerTask.enqueue`: the job already holds its unique key, and
+the uniqueness check would hand back the failed attempt. The arguments come from the
+backend's copy of the failed attempt (exact, and present even with
+`OVERSEER_RECORD_ARGS = False`), falling back to the ones recorded on the job. The job is marked `PENDING`
 *before* the enqueue so that a synchronous backend (the immediate backend) running the retry
 inline sets the final status last. If the enqueue itself fails, the job is marked `FAILED`.
 
@@ -68,8 +77,15 @@ was missed fires once rather than replaying every missed occurrence.
 
 The cron parser is dependency-free, supports the five standard fields with steps, ranges,
 lists, names and aliases, the vixie-cron "day-of-month OR day-of-week" rule, and evaluates in
-the schedule's timezone (a time inside a DST gap is shifted forward by the gap; a repeated
-hour fires once).
+the schedule's timezone. Around daylight-saving changes wall-clock order and real-time order
+disagree, so `next_after()` starts a few hours before the reference time in wall-clock time,
+resolves each matching minute to its real instants (two in a repeated hour, for schedules
+that run every hour; one, shifted past the gap, for a time that does not exist) and keeps
+the earliest instant after the reference, compared in UTC. It is checked against a
+brute-force matcher over a year of start times in two zones.
+
+A schedule that can never fire is disabled with the reason in `Schedule.last_error`, inside
+its own savepoint, so one bad row never rolls back the others' enqueues.
 
 ## Metrics
 
