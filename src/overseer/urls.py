@@ -28,7 +28,8 @@ urlpatterns = [
     path("api/queues/", api.queues, name="api-queues"),
     path("api/tasks/", api.tasks, name="api-tasks"),
     path("api/jobs/", api.jobs, name="api-jobs"),
-    path("api/jobs/<uuid:pk>/", api.job, name="api-job"),
+    # str, not uuid: the API answers malformed or upper-case ids with JSON, not an HTML 404.
+    path("api/jobs/<str:pk>/", api.job, name="api-job"),
     path("api/workers/", api.workers, name="api-workers"),
     path("api/schedules/", api.schedules, name="api-schedules"),
     path("api/metrics/", api.metrics, name="api-metrics"),

@@ -23,6 +23,10 @@ DEFAULTS = {
     # Dashboard access: staff plus this permission codename on Job.
     "OVERSEER_PERMISSION": "overseer.view_dashboard",
     "OVERSEER_REFRESH_SECONDS": 5,
+    # Lets uptime checks call /api/health/ with "Authorization: Bearer <token>".
+    "OVERSEER_HEALTH_TOKEN": None,
+    # "Retry all" retries at most this many failed jobs per click.
+    "OVERSEER_RETRY_ALL_LIMIT": 200,
     # Alerts.
     "OVERSEER_ALERT_WINDOW_MINUTES": 5,
     "OVERSEER_ALERT_FAILURE_RATE": 0.25,

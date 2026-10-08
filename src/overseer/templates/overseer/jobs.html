@@ -28,9 +28,9 @@
   {% endfor %}
 </table>
 <div class="pagination">
-  {% if page.has_previous %}<a href="?{% querystring page=page.previous_page_number %}">‹ newer</a>{% endif %}
+  {% if page.has_previous %}<a href="{% querystring page=page.previous_page_number %}">‹ newer</a>{% endif %}
   <span>page {{ page.number }} of {{ page.paginator.num_pages }}</span>
-  {% if page.has_next %}<a href="?{% querystring page=page.next_page_number %}">older ›</a>{% endif %}
+  {% if page.has_next %}<a href="{% querystring page=page.next_page_number %}">older ›</a>{% endif %}
 </div>
 {% else %}<div class="empty">No jobs match.</div>{% endif %}
 </div>

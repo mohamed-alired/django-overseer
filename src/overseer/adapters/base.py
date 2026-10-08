@@ -37,6 +37,10 @@ class BaseAdapter:
         """Number of tasks waiting in the backend, or None when unknown."""
         return None
 
+    def queue_depths(self, queue_names: list[str]) -> dict[str, int | None]:
+        """``queue_depth`` for several queues; adapters override it with one query."""
+        return {name: self.queue_depth(name) for name in queue_names}
+
 
 class GenericAdapter(BaseAdapter):
     pass

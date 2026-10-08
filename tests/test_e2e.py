@@ -4,12 +4,14 @@ real sessions, CSRF and redirects, driven like a browser would."""
 from __future__ import annotations
 
 import re
+from datetime import timedelta
 
 import pytest
 import requests
 from django.urls import reverse
+from django.utils import timezone
 
-from overseer.models import Job, JobStatus, Schedule, Worker
+from overseer.models import Job, JobStatus, Run, Schedule
 from overseer.scheduling.sync import sync_schedules
 from tests import tasks
 from tests.conftest import PASSWORD
@@ -167,21 +169,32 @@ class TestEndToEnd:
         rows = browser.get("api-schedules").json()["schedules"]
         assert any(r["name"] == "heartbeat" and r["runs_count"] == 1 for r in rows)
 
-    def test_health_reflects_workers(self, browser, worker):
+    def test_health_reflects_waiting_tasks(self, browser, worker, settings):
+        settings.OVERSEER_ALERT_WAIT_SECONDS = 60
         tasks.plain.enqueue(1)
         resp = browser.get("api-health")
-        assert resp.status_code == 503
-        assert resp.json() == {
-            **resp.json(),
-            "ok": False,
-            "waiting": 1,
-            "workers_online": 0,
-        }
-        Worker.objects.create(worker_id="e2e-w", backend="default", hostname="h")
+        assert resp.status_code == 200 and resp.json()["waiting"] == 1  # just enqueued
+        Run.objects.update(enqueued_at=timezone.now() - timedelta(minutes=5))
         resp = browser.get("api-health")
-        assert resp.status_code == 200 and resp.json()["ok"] is True
+        assert resp.status_code == 503
+        assert resp.json() == {**resp.json(), "ok": False, "waiting": 1}
         worker()
-        assert browser.get("api-health").json()["waiting"] == 0
+        resp = browser.get("api-health")
+        assert resp.status_code == 200 and resp.json()["waiting"] == 0
+
+    def test_health_accepts_the_bearer_token(self, anonymous, settings):
+        url = anonymous.url("api-health")
+        assert anonymous.http.get(url).status_code == 401
+        settings.OVERSEER_HEALTH_TOKEN = "s3cret-token"
+        bad = anonymous.http.get(url, headers={"Authorization": "Bearer wrong"})
+        assert bad.status_code == 401
+        good = anonymous.http.get(url, headers={"Authorization": "Bearer s3cret-token"})
+        assert good.status_code == 200 and good.json()["ok"] is True
+        # The token opens the health endpoint only.
+        other = anonymous.http.get(
+            anonymous.url("api-overview"), headers={"Authorization": "Bearer s3cret-token"}
+        )
+        assert other.status_code == 401
 
     def test_anonymous_is_redirected_and_api_denied(self, anonymous):
         resp = anonymous.http.get(anonymous.url("overview"), allow_redirects=False)

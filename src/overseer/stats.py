@@ -5,9 +5,10 @@ from __future__ import annotations
 from datetime import timedelta
 
 from django.db.models import Avg, Count, Max, OuterRef, Q, Subquery
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 
-from . import conf, metrics
+from . import metrics
 from .adapters.base import get_adapter
 from .models import Alert, Job, JobStatus, Run, RunStatus, Schedule, Worker
 
@@ -26,9 +27,35 @@ def distinct_values(field: str) -> list:
     return sorted(Job.objects.order_by().values_list(field, flat=True).distinct())
 
 
+def worker_counts(now=None) -> dict:
+    """Running worker processes: heartbeat workers online, and workers without heartbeats.
+
+    Workers without heartbeats (a plain ``db_worker``) are only seen when they run a task,
+    so whether they are alive cannot be known; they are counted apart.
+    """
+    now = now or timezone.now()
+    active = list(Worker.objects.filter(stopped_at__isnull=True))
+    online = sum(1 for w in active if w.is_online(now))
+    return {
+        "workers_online": online,
+        "workers_total": len(active),
+        "workers_without_heartbeat": sum(1 for w in active if not w.has_heartbeat),
+    }
+
+
+def oldest_wait_seconds(now=None) -> float:
+    """How long the longest-waiting ready run has been waiting, in seconds (0 if none)."""
+    from .alerts import oldest_waiting
+
+    now = now or timezone.now()
+    oldest = min((row["ready_since"] for row in oldest_waiting(now)), default=None)
+    return max((now - oldest).total_seconds(), 0.0) if oldest else 0.0
+
+
 def overview(minutes: int = 60, now=None) -> dict:
     since, now = window_bounds(minutes, now)
-    finished = Run.objects.filter(finished_at__gte=since)
+    # Cancelled runs never executed: they are not "processed" and not part of failure rates.
+    finished = Run.objects.filter(finished_at__gte=since).exclude(status=RunStatus.CANCELLED)
     counts = finished.aggregate(
         total=Count("id"),
         succeeded=Count("id", filter=Q(status=RunStatus.SUCCESSFUL)),
@@ -40,8 +67,6 @@ def overview(minutes: int = 60, now=None) -> dict:
         Q(run_after__isnull=True) | Q(run_after__lte=now)
     )
     scheduled = Run.objects.filter(status=RunStatus.READY, run_after__gt=now)
-    offline_after = timedelta(seconds=conf.get_setting("OVERSEER_WORKER_OFFLINE_AFTER"))
-    workers = Worker.objects.filter(stopped_at__isnull=True)
     total = counts["total"] or 0
     return {
         "window_minutes": minutes,
@@ -53,11 +78,11 @@ def overview(minutes: int = 60, now=None) -> dict:
         "runtime_avg_ms": int(counts["runtime_avg"] or 0),
         "runtime_max_ms": counts["runtime_max"] or 0,
         "waiting": waiting.count(),
+        "oldest_wait_seconds": round(oldest_wait_seconds(now), 1),
         "scheduled": scheduled.count(),
         "running": Run.objects.filter(status=RunStatus.RUNNING).count(),
         "failed_jobs_open": Job.objects.filter(status=JobStatus.FAILED, dismissed=False).count(),
-        "workers_online": workers.filter(last_seen_at__gte=now - offline_after).count(),
-        "workers_total": workers.count(),
+        **worker_counts(now),
         "open_alerts": Alert.objects.filter(resolved_at__isnull=True).count(),
         "schedules_enabled": Schedule.objects.filter(enabled=True).count(),
     }
@@ -99,6 +124,7 @@ def queues(minutes: int = 60, now=None) -> list[dict]:
         r.update(waiting=row["waiting"], running=row["running"], scheduled=row["scheduled"])
     recent = (
         Run.objects.filter(finished_at__gte=since)
+        .exclude(status=RunStatus.CANCELLED)
         .values("job__queue_name")
         .annotate(
             processed=Count("id"),
@@ -118,13 +144,12 @@ def queues(minutes: int = 60, now=None) -> list[dict]:
     backends = set(distinct_values("backend")) or {"default"}
     for alias in backends:
         try:
-            adapter = get_adapter(alias)
+            depths = get_adapter(alias).queue_depths(list(rows))
         except Exception:
             continue
-        for name, r in rows.items():
-            depth = adapter.queue_depth(name)
-            if depth is not None:
-                r["backend_depth"] = (r.get("backend_depth") or 0) + depth
+        for name, depth in depths.items():
+            if depth is not None and name in rows:
+                rows[name]["backend_depth"] = (rows[name].get("backend_depth") or 0) + depth
     return sorted(rows.values(), key=lambda r: r["queue_name"])
 
 
@@ -132,6 +157,7 @@ def tasks(minutes: int = 60 * 24, now=None) -> list[dict]:
     since, now = window_bounds(minutes, now)
     rows = (
         Run.objects.filter(finished_at__gte=since)
+        .exclude(status=RunStatus.CANCELLED)
         .values("job__task_path", "job__task_name")
         .annotate(
             processed=Count("id"),
@@ -164,15 +190,15 @@ def tasks(minutes: int = 60 * 24, now=None) -> list[dict]:
 
 def workers(now=None) -> list[dict]:
     now = now or timezone.now()
-    offline_after = timedelta(seconds=conf.get_setting("OVERSEER_WORKER_OFFLINE_AFTER"))
     out = []
     for w in Worker.objects.select_related("current_run__job"):
+        online = w.is_online(now)
         if w.stopped_at:
             state = "stopped"
-        elif w.last_seen_at < now - offline_after:
-            state = "offline"
+        elif online is None:
+            state = "no heartbeat"
         else:
-            state = "online"
+            state = "online" if online else "offline"
         out.append(
             {
                 "worker_id": w.worker_id,
@@ -184,6 +210,7 @@ def workers(now=None) -> list[dict]:
                 "started_at": w.started_at,
                 "last_seen_at": w.last_seen_at,
                 "stopped_at": w.stopped_at,
+                "heartbeat_seconds": w.heartbeat_seconds,
                 "tasks_processed": w.tasks_processed,
                 "tasks_failed": w.tasks_failed,
                 "current_run": w.current_run,
@@ -212,20 +239,23 @@ def job_queryset(
         qs = qs.filter(queue_name=queue_name)
     if task_path:
         qs = qs.filter(task_path=task_path)
+    # Run conditions are subqueries rather than joins: no DISTINCT, no GROUP BY, and the
+    # paginator's COUNT stays a plain count over the job table.
     if worker_id:
-        qs = qs.filter(runs__worker_id=worker_id).distinct()
+        qs = qs.filter(id__in=Run.objects.filter(worker_id=worker_id).values("job_id"))
     if dismissed is not None:
         qs = qs.filter(dismissed=dismissed)
     if search:
         qs = qs.filter(
             Q(task_path__icontains=search)
             | Q(id__icontains=search)
-            | Q(runs__result_id__icontains=search)
+            | Q(id__in=Run.objects.filter(result_id__icontains=search).values("job_id"))
             | Q(unique_key__icontains=search)
-        ).distinct()
-    # Meta.ordering is dropped from GROUP BY queries, so order explicitly.
+        )
+    runs = Run.objects.filter(job=OuterRef("pk")).order_by()
     return qs.annotate(
-        run_count=Count("runs", distinct=True), last_run_at=Max("runs__enqueued_at")
+        run_count=Coalesce(Subquery(runs.values("job").annotate(n=Count("pk")).values("n")[:1]), 0),
+        last_run_at=Subquery(runs.order_by("-enqueued_at").values("enqueued_at")[:1]),
     ).order_by("-created_at", "id")
 
 

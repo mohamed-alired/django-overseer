@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from django.contrib import messages
 from django.contrib.auth.mixins import UserPassesTestMixin
 from django.core.paginator import Paginator
@@ -9,6 +11,7 @@ from django.http import HttpResponseNotAllowed
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views import View
 from django.views.generic import TemplateView
 
@@ -19,7 +22,10 @@ from .models import Alert, Job, JobStatus, Run, RunStatus, Schedule
 from .scheduling import scheduler as scheduling
 from .scheduling.sync import sync_schedules
 
+logger = logging.getLogger("overseer")
+
 WINDOWS = (15, 60, 360, 1440)
+WINDOW_LABELS = ((15, "15 minutes"), (60, "hour"), (360, "6 hours"), (1440, "24 hours"))
 
 
 def user_can_view(user) -> bool:
@@ -41,6 +47,15 @@ class AccessMixin(UserPassesTestMixin):
 class Page(AccessMixin, TemplateView):
     section = ""
 
+    def window_params(self):
+        """Query parameters the window selector must carry along (filters, not paging)."""
+        return [
+            (key, value)
+            for key in self.request.GET
+            if key not in {"minutes", "page"}
+            for value in self.request.GET.getlist(key)
+        ]
+
     def window(self, default=60):
         try:
             minutes = int(self.request.GET.get("minutes", default))
@@ -58,6 +73,8 @@ class Page(AccessMixin, TemplateView):
             nav_failed=Job.objects.filter(status=JobStatus.FAILED, dismissed=False).count(),
             nav_alerts=Alert.objects.filter(resolved_at__isnull=True).count(),
             windows=WINDOWS,
+            window_choices=WINDOW_LABELS,
+            extra_params=self.window_params(),
             now=timezone.now(),
         )
         return ctx
@@ -237,7 +254,15 @@ class Action(AccessMixin, View):
         return HttpResponseNotAllowed(["POST"])
 
     def back(self, default="overseer:overview"):
-        return redirect(self.request.POST.get("next") or reverse(default))
+        """Redirect to the posted ``next`` URL when it is on this site, else to ``default``."""
+        target = self.request.POST.get("next", "")
+        if not url_has_allowed_host_and_scheme(
+            target,
+            allowed_hosts={self.request.get_host()},
+            require_https=self.request.is_secure(),
+        ):
+            target = reverse(default)
+        return redirect(target)
 
 
 class JobRetryView(Action):
@@ -247,8 +272,12 @@ class JobRetryView(Action):
             run = retry.retry_job(job)
         except ValueError as exc:
             messages.error(request, str(exc))
+        except Exception as exc:
+            logger.exception("Retrying job %s failed", job.pk)
+            messages.error(request, f"Retry failed: {type(exc).__name__}: {exc}")
         else:
-            messages.success(request, f"Retry enqueued as attempt {run.attempt}.")
+            attempt = f" as attempt {run.attempt}" if run is not None else ""
+            messages.success(request, f"Retry enqueued{attempt}.")
         return self.back("overseer:failed")
 
 
@@ -278,21 +307,38 @@ class JobCancelView(Action):
 
 class JobDismissView(Action):
     def post(self, request, pk):
-        Job.objects.filter(pk=pk, status=JobStatus.FAILED).update(dismissed=True)
-        messages.success(request, "Job dismissed from the failed list.")
+        if Job.objects.filter(pk=pk, status=JobStatus.FAILED).update(dismissed=True):
+            messages.success(request, "Job dismissed from the failed list.")
+        else:
+            messages.error(request, "Only a failed job can be dismissed.")
         return self.back("overseer:failed")
 
 
 class FailedRetryAllView(Action):
     def post(self, request):
-        count = 0
-        for job in Job.objects.filter(status=JobStatus.FAILED, dismissed=False):
+        """Retry open failed jobs, oldest first, up to ``OVERSEER_RETRY_ALL_LIMIT`` per click.
+
+        One job that cannot be retried never stops the others; it is counted and skipped.
+        """
+        limit = conf.get_setting("OVERSEER_RETRY_ALL_LIMIT")
+        failed = Job.objects.filter(status=JobStatus.FAILED, dismissed=False)
+        total = failed.count()
+        retried = skipped = 0
+        for job in failed.order_by("created_at")[:limit]:
             try:
                 retry.retry_job(job)
-                count += 1
-            except ValueError:
-                continue
-        messages.success(request, f"Retried {count} job(s).")
+            except Exception as exc:
+                skipped += 1
+                if not isinstance(exc, ValueError):
+                    logger.exception("Retrying job %s failed", job.pk)
+            else:
+                retried += 1
+        message = f"Retried {retried} job(s)."
+        if skipped:
+            message += f" {skipped} could not be retried."
+        if total > limit:
+            message += f" {total - limit} more remain; click again to continue."
+        (messages.success if retried or not skipped else messages.error)(request, message)
         return self.back("overseer:failed")
 
 
@@ -308,12 +354,25 @@ class ScheduleToggleView(Action):
 
     def post(self, request, pk):
         schedule = get_object_or_404(Schedule, pk=pk)
+        if not schedule.enabled:
+            try:
+                if schedule.next_run_at is None or schedule.next_run_at < timezone.now():
+                    schedule.next_run_at = scheduling.compute_next_run(schedule)
+            except ValueError as exc:
+                messages.error(request, f"Schedule {schedule.name!r} cannot run: {exc}")
+                return self.back("overseer:schedules")
+            schedule.last_error = ""
+            schedule.missing_from_code = False
         schedule.enabled = not schedule.enabled
-        if schedule.enabled and (
-            schedule.next_run_at is None or schedule.next_run_at < timezone.now()
-        ):
-            schedule.next_run_at = scheduling.compute_next_run(schedule)
-        schedule.save(update_fields=["enabled", "next_run_at", "updated_at"])
+        schedule.save(
+            update_fields=[
+                "enabled",
+                "next_run_at",
+                "last_error",
+                "missing_from_code",
+                "updated_at",
+            ]
+        )
         messages.success(request, f"Schedule {'enabled' if schedule.enabled else 'paused'}.")
         return self.back("overseer:schedules")
 

@@ -45,7 +45,12 @@ def populated(worker, settings):
         args=[9],
         next_run_at=timezone.now() + timedelta(hours=1),
     )
-    Worker.objects.create(worker_id="w-offline", last_seen_at=timezone.now() - timedelta(hours=1))
+    Worker.objects.create(
+        worker_id="w-offline",
+        last_seen_at=timezone.now() - timedelta(hours=1),
+        heartbeat_seconds=10,
+    )
+    Worker.objects.create(worker_id="w-online", heartbeat_seconds=10)
     Alert.objects.create(
         kind="failure_rate", key="default", message="boom", value=0.5, threshold=0.25
     )
@@ -113,7 +118,9 @@ class TestPages:
         ov = resp.context["overview"]
         assert ov["processed"] == 3 and ov["succeeded"] == 2 and ov["failed"] == 1
         assert ov["waiting"] == 1 and ov["failed_jobs_open"] == 1 and ov["open_alerts"] == 1
-        assert ov["workers_total"] == 2 and ov["workers_online"] == 1
+        # The db_worker that ran the tasks sends no heartbeats; it is counted apart.
+        assert ov["workers_total"] == 3 and ov["workers_online"] == 1
+        assert ov["workers_without_heartbeat"] == 1
         assert b"picky" in resp.content and b"boom" in resp.content
 
     def test_window_param(self, staff_client, populated):
@@ -290,13 +297,15 @@ class TestApi:
         assert data["minutes"] == 15 and len(data["points"]) == 15
         health = staff_client.get(reverse("overseer:api-health"))
         assert health.status_code == 200 and health.json()["ok"] is True
-        Worker.objects.update(last_seen_at=timezone.now() - timedelta(hours=2))
+        # The pending task has now waited far longer than OVERSEER_ALERT_WAIT_SECONDS.
+        Run.objects.filter(status="READY").update(enqueued_at=timezone.now() - timedelta(hours=2))
         health = staff_client.get(reverse("overseer:api-health"))
         assert health.status_code == 503 and health.json()["waiting"] == 1
+        assert health.json()["oldest_wait_seconds"] > 7000
 
     def test_workers_and_schedules(self, staff_client, populated):
         workers = staff_client.get(reverse("overseer:api-workers")).json()["workers"]
-        assert {w["state"] for w in workers} == {"online", "offline"}
+        assert {w["state"] for w in workers} == {"online", "offline", "no heartbeat"}
         schedules = staff_client.get(reverse("overseer:api-schedules")).json()["schedules"]
         assert schedules[0]["name"] == "nightly" and schedules[0]["cron"] == "0 2 * * *"
 

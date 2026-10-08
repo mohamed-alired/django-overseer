@@ -9,7 +9,7 @@
     <div class="card"><div class="label">Failure rate</div><div class="value">{{ overview.failure_rate|pct }}</div><div class="sub">{{ overview.failed }} failed</div></div>
     <div class="card"><div class="label">Avg runtime</div><div class="value">{{ overview.runtime_avg_ms|ms }}</div><div class="sub">max {{ overview.runtime_max_ms|ms }}</div></div>
     <div class="card"><div class="label">Waiting</div><div class="value">{{ overview.waiting }}</div><div class="sub">{{ overview.scheduled }} scheduled later</div></div>
-    <div class="card"><div class="label">Running</div><div class="value">{{ overview.running }}</div><div class="sub">{{ overview.workers_online }} / {{ overview.workers_total }} workers online</div></div>
+    <div class="card"><div class="label">Running</div><div class="value">{{ overview.running }}</div><div class="sub">{{ overview.workers_online }} / {{ overview.workers_total }} workers online{% if overview.workers_without_heartbeat %} · {{ overview.workers_without_heartbeat }} without heartbeat{% endif %}</div></div>
     <div class="card"><div class="label">Needs attention</div><div class="value">{{ overview.failed_jobs_open }}</div><div class="sub">failed jobs · {{ overview.open_alerts }} open alerts</div></div>
   </div>
 

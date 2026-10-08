@@ -52,6 +52,7 @@ pre { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; 
 .actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .actions form { display: inline; }
 .muted { color: var(--muted); }
+.error-text { color: var(--bad, #b42318); font-size: 12px; }
 .bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
 .bar > span { display: block; height: 100%; background: var(--accent); }
 .sparkline { display: flex; align-items: flex-end; gap: 2px; height: 48px; }

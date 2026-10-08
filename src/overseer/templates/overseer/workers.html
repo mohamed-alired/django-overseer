@@ -10,7 +10,7 @@
   <tr>
     <td class="mono"><a href="{% url 'overseer:jobs' %}?worker={{ w.worker_id|urlencode }}">{{ w.worker_id }}</a></td>
     <td>{{ w.hostname|default:"–" }}{% if w.pid %} <span class="muted">pid {{ w.pid }}</span>{% endif %}</td>
-    <td><span class="badge {% if w.state == 'online' %}SUCCESSFUL{% elif w.state == 'offline' %}FAILED{% else %}CANCELLED{% endif %}">{{ w.state }}</span></td>
+    <td><span class="badge {% if w.state == 'online' %}SUCCESSFUL{% elif w.state == 'offline' %}FAILED{% else %}CANCELLED{% endif %}"{% if w.state == 'no heartbeat' %} title="A plain db_worker is only seen when it runs a task; use overseer_worker for liveness."{% endif %}>{{ w.state }}</span></td>
     <td>{{ w.queues|join:", "|default:"–" }}</td>
     <td>{% if w.current_run %}<a href="{% url 'overseer:job' w.current_run.job.pk %}">{{ w.current_run.job.task_name }}</a> <span class="muted">{{ w.current_run.started_at|ago }}</span>{% else %}<span class="muted">idle</span>{% endif %}</td>
     <td class="num">{{ w.tasks_processed }}</td><td class="num">{{ w.tasks_failed }}</td>

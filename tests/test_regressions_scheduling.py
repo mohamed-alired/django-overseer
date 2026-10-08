@@ -116,6 +116,9 @@ class TestBrokenSchedules:
         s.refresh_from_db()
         assert s.next_run_at == at(2026, 1, 1, 12, 1)
 
+    # transaction=True: after a failed iteration the loop recycles the connection, which
+    # must not happen inside a test transaction (PostgreSQL would lose the test's data).
+    @pytest.mark.django_db(transaction=True)
     def test_loop_survives_any_error(self, monkeypatch):
         calls = []
 

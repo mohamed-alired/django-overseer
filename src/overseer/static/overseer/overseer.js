@@ -9,7 +9,10 @@
       .then(function (html) {
         var doc = new DOMParser().parseFromString(html, "text/html");
         var fresh = doc.querySelector('[data-refresh-id="' + el.getAttribute("data-refresh-id") + '"]');
-        if (fresh) { el.innerHTML = fresh.innerHTML; }
+        // No matching panel means we did not get this page back (an expired session
+        // redirects to the login page): keep the last render and do not claim freshness.
+        if (!fresh) { return Promise.reject("stale"); }
+        el.innerHTML = fresh.innerHTML;
         document.querySelectorAll("[data-updated-at]").forEach(function (n) {
           n.textContent = new Date().toLocaleTimeString();
         });

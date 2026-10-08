@@ -2,26 +2,52 @@
 
 from __future__ import annotations
 
+import uuid
 from functools import wraps
 
 from django.core.paginator import Paginator
-from django.http import Http404, JsonResponse
+from django.http import JsonResponse
 from django.utils import timezone
+from django.utils.crypto import constant_time_compare
 
 from . import conf, stats
 from .models import Alert, Job, Schedule
 from .views import WINDOWS, user_can_view
 
 
-def access_required(view):
-    @wraps(view)
-    def wrapper(request, *args, **kwargs):
-        if not user_can_view(request.user):
-            status = 401 if not request.user.is_authenticated else 403
-            return JsonResponse({"detail": "Overseer access required."}, status=status)
-        return view(request, *args, **kwargs)
+def _bearer_token_ok(request) -> bool:
+    token = conf.get_setting("OVERSEER_HEALTH_TOKEN")
+    header = request.headers.get("Authorization", "")
+    return (
+        bool(token)
+        and header.startswith("Bearer ")
+        and constant_time_compare(header.removeprefix("Bearer ").strip(), token)
+    )
 
-    return wrapper
+
+def access_required(view=None, *, allow_token=False):
+    """Staff with the dashboard permission; ``allow_token`` also accepts the health token."""
+
+    def decorator(view):
+        @wraps(view)
+        def wrapper(request, *args, **kwargs):
+            if not user_can_view(request.user) and not (allow_token and _bearer_token_ok(request)):
+                status = 401 if not request.user.is_authenticated else 403
+                return JsonResponse({"detail": "Overseer access required."}, status=status)
+            return view(request, *args, **kwargs)
+
+        return wrapper
+
+    return decorator(view) if view is not None else decorator
+
+
+def _int_param(request, name, default, lo, hi):
+    """An integer query parameter clamped to [lo, hi]; ``default`` when absent or invalid."""
+    try:
+        value = int(request.GET.get(name, default))
+    except (TypeError, ValueError):
+        return default
+    return min(max(value, lo), hi)
 
 
 def _minutes(request, default):
@@ -106,12 +132,14 @@ def jobs(request):
         worker_id=g.get("worker") or None,
         search=g.get("q") or None,
     )
-    page = Paginator(qs, min(int(g.get("per_page", 50) or 50), 200)).get_page(g.get("page"))
+    per_page = _int_param(request, "per_page", 50, 1, 200)
+    page = Paginator(qs, per_page).get_page(g.get("page"))
     return JsonResponse(
         {
             "count": page.paginator.count,
             "page": page.number,
             "pages": page.paginator.num_pages,
+            "per_page": per_page,
             "results": [_job(j) for j in page.object_list],
         }
     )
@@ -120,9 +148,9 @@ def jobs(request):
 @access_required
 def job(request, pk):
     try:
-        obj = Job.objects.get(pk=pk)
-    except (Job.DoesNotExist, ValueError) as exc:
-        raise Http404 from exc
+        obj = Job.objects.get(pk=uuid.UUID(str(pk)))
+    except (Job.DoesNotExist, ValueError):
+        return JsonResponse({"detail": "No such job."}, status=404)
     return JsonResponse(_job(obj, stats.run_chain(obj)))
 
 
@@ -151,10 +179,13 @@ def schedules(request):
                     "queue_name": s.queue_name,
                     "enabled": s.enabled,
                     "declared_in_code": s.declared_in_code,
+                    "timezone": s.timezone,
                     "next_run_at": s.next_run_at,
                     "last_run_at": s.last_run_at,
                     "last_job": str(s.last_job_id) if s.last_job_id else None,
                     "runs_count": s.runs_count,
+                    "last_error": s.last_error,
+                    "missing_from_code": s.missing_from_code,
                 }
                 for s in Schedule.objects.all()
             ]
@@ -193,18 +224,27 @@ def alerts(request):
     )
 
 
-@access_required
+@access_required(allow_token=True)
 def health(request):
-    """A small liveness payload: workers online, waiting tasks, open alerts."""
+    """Liveness for load balancers and uptime checks: 503 when tasks are not being picked up.
+
+    "Not picked up" means some ready task has waited longer than
+    ``OVERSEER_ALERT_WAIT_SECONDS``. That works for every worker kind, including a plain
+    ``db_worker`` that sends no heartbeats. Besides a staff session, the endpoint accepts
+    ``Authorization: Bearer <OVERSEER_HEALTH_TOKEN>`` when that setting is set.
+    """
     data = stats.overview(_minutes(request, 15))
-    ok = data["workers_online"] > 0 or data["waiting"] == 0
+    max_wait = conf.get_setting("OVERSEER_ALERT_WAIT_SECONDS")
+    ok = data["oldest_wait_seconds"] <= max_wait
     payload = {
         "ok": ok,
-        "workers_online": data["workers_online"],
         "waiting": data["waiting"],
+        "oldest_wait_seconds": data["oldest_wait_seconds"],
+        "max_wait_seconds": max_wait,
         "running": data["running"],
+        "workers_online": data["workers_online"],
+        "workers_without_heartbeat": data["workers_without_heartbeat"],
         "failed_jobs_open": data["failed_jobs_open"],
         "open_alerts": data["open_alerts"],
-        "offline_after": conf.get_setting("OVERSEER_WORKER_OFFLINE_AFTER"),
     }
     return JsonResponse(payload, status=200 if ok else 503)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from django.db import transaction
+from django.db.models import Count
 from django.utils import timezone
 
 from ..models import RunStatus
@@ -44,6 +45,18 @@ class DatabaseAdapter(BaseAdapter):
         if queue_name:
             qs = qs.filter(queue_name=queue_name)
         return qs.count()
+
+    def queue_depths(self, queue_names):
+        DBTaskResult = self._model()
+        counts = dict(
+            DBTaskResult.objects.filter(
+                status="READY", backend_name=self.alias, queue_name__in=queue_names
+            )
+            .order_by()
+            .values_list("queue_name")
+            .annotate(n=Count("pk"))
+        )
+        return {name: counts.get(name, 0) for name in queue_names}
 
 
 __all__ = ["DatabaseAdapter", "RunStatus"]

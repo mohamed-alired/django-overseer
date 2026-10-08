@@ -12,7 +12,7 @@
     <td>{{ s.name }}{% if not s.declared_in_code %} <span class="muted">(db)</span>{% endif %}</td>
     <td class="mono">{{ s.task_path }}{% if s.args or s.kwargs %}<br><span class="muted">{{ s.args }} {{ s.kwargs }}</span>{% endif %}</td>
     <td class="mono">{{ s.spec }}{% if s.timezone %} <span class="muted">{{ s.timezone }}</span>{% endif %}</td>
-    <td><span class="badge {% if s.enabled %}on{% else %}off{% endif %}">{% if s.enabled %}enabled{% else %}paused{% endif %}</span></td>
+    <td><span class="badge {% if s.enabled %}on{% else %}off{% endif %}">{% if s.enabled %}enabled{% elif s.missing_from_code %}removed from code{% else %}paused{% endif %}</span>{% if s.last_error %}<br><span class="error-text" title="{{ s.last_error }}">{{ s.last_error|truncatechars:80 }}</span>{% endif %}</td>
     <td>{% if s.enabled %}{{ s.next_run_at|ago }}{% else %}–{% endif %}</td>
     <td>{% if s.last_job %}<a href="{% url 'overseer:job' s.last_job.pk %}">{{ s.last_run_at|ago }}</a> <span class="badge {{ s.last_job.status }}">{{ s.last_job.status }}</span>{% else %}–{% endif %}</td>
     <td class="num">{{ s.runs_count }}</td>
